@@ -41,6 +41,15 @@
 #define AE_NONE 0       /* No events registered. */
 #define AE_READABLE 1   /* Fire when descriptor is readable. */
 #define AE_WRITABLE 2   /* Fire when descriptor is writable. */
+/**
+ * AE_BARRIER 的作用
+ * 默认行为：
+ * Redis 通常会先处理 可读事件（AE_READABLE），然后处理 可写事件（AE_WRITABLE）。
+ * 这种顺序的设计是为了提高性能，允许 Redis 在读取客户端请求后立即生成响应并发送。
+ * 设置 AE_BARRIER 后：
+ * Redis 会反转事件的处理顺序，先处理 可写事件，再处理 可读事件。
+ * 这种反转顺序确保了某些关键操作（如数据持久化或状态同步）在处理客户端请求之前完成。
+ */
 #define AE_BARRIER 4    /* With WRITABLE, never fire the event if the
                            READABLE event already fired in the same event
                            loop iteration. Useful when you want to persist

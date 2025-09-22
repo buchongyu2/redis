@@ -1939,6 +1939,9 @@ void updateCachedTime(int update_daylight_info) {
     updateCachedTimeWithUs(update_daylight_info, us);
 }
 
+/**
+ * 捕获子进程的退出信息，退出后执行backgroundSaveDoneHandler函数
+ */
 void checkChildrenDone(void) {
     int statloc = 0;
     pid_t pid;
@@ -2152,6 +2155,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         rewriteAppendOnlyFileBackground();
     }
 
+    /* 检查是否有正在进行的后台保存或 AOF 重写已终止。 */
     /* Check if a background saving or AOF rewrite in progress terminated. */
     if (hasActiveChildProcess() || ldbPendingChildren())
     {
@@ -2426,13 +2430,25 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * We also don't send the ACKs while clients are paused, since it can
      * increment the replication backlog, they'll be sent after the pause
      * if we are still the master. */
+
+    /* 如果在之前的事件循环迭代中至少有一个客户端被阻塞，
+     * 则向所有从节点发送一个 ACK 请求。
+     * 注意，我们在调用 processUnblockedClients() 之后执行此操作，
+     * 因此如果有多个流水线中的 WAIT 命令，而刚刚解除阻塞的 WAIT
+     * 再次被阻塞，我们无需在没有其他事件循环事件的情况下等待一个
+     * server cron 周期。详见问题 #6623。
+     * 
+     * 此外，当客户端被暂停时，我们不会发送 ACK，因为这可能会增加
+     * 复制积压缓冲区的大小。如果暂停结束后我们仍然是主节点，
+     * ACK 将会被发送。 */
+    // 主节点需要向从节点发送 REPLCONF GETACK 命令，以请求从节点报告其复制偏移量。
     if (server.get_ack_from_slaves && !checkClientPauseTimeoutAndReturnIfPaused()) {
         robj *argv[3];
 
-        argv[0] = shared.replconf;
-        argv[1] = shared.getack;
-        argv[2] = shared.special_asterick; /* Not used argument. */
-        replicationFeedSlaves(server.slaves, server.slaveseldb, argv, 3);
+        argv[0] = shared.replconf; // REPLCONF
+        argv[1] = shared.getack;   // GETACK
+        argv[2] = shared.special_asterick;  /* 未使用的参数,是个"*"号 */ /* Not used argument. */
+        replicationFeedSlaves(server.slaves, server.slaveseldb, argv, 3); // 在这里开始发送REPLCONF GETACK
         server.get_ack_from_slaves = 0;
     }
 
@@ -3322,6 +3338,8 @@ void initServer(void) {
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like clients timeout, eviction of unaccessed
      * expired keys and so forth. */
+    /* 创建定时器回调，这是我们以增量方式处理许多后台操作的方式，
+     * 例如客户端超时、逐步驱逐未访问的过期键等。aeCreateTimeEvent 函数会在事件循环中注册一个定时器事件，并将 serverCron 设置为触发时的回调函数。每次事件循环运行时，都会检查是否需要触发定时器事件，如果需要，就调用 serverCron。 */
     if (aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
         serverPanic("Can't create event loop timers.");
         exit(1);
@@ -3718,6 +3736,38 @@ void slowlogPushCurrentCommand(client *c, struct redisCommand *cmd, ustime_t dur
  * preventCommandReplication(client *c);
  *
  */
+/* Call() 是 Redis 执行命令的核心函数。
+ *
+ * 可以传递以下标志：
+ * CMD_CALL_NONE        无标志。
+ * CMD_CALL_SLOWLOG     检查命令执行速度，并在需要时记录到慢日志中。
+ * CMD_CALL_STATS       更新命令统计信息。
+ * CMD_CALL_PROPAGATE_AOF   如果命令修改了数据集，或客户端标志强制传播，
+ *                          则将命令追加到 AOF 文件。
+ * CMD_CALL_PROPAGATE_REPL  如果命令修改了数据集，或客户端标志强制传播，
+ *                          则将命令发送到从节点。
+ * CMD_CALL_PROPAGATE   PROPAGATE_AOF 和 PROPAGATE_REPL 的别名。
+ * CMD_CALL_FULL        SLOWLOG、STATS 和 PROPAGATE 的别名。
+ *
+ * 具体的传播行为取决于客户端标志。具体来说：
+ *
+ * 1. 如果客户端标志设置了 CLIENT_FORCE_AOF 或 CLIENT_FORCE_REPL，
+ *    并且调用标志中设置了相应的 CMD_CALL_PROPAGATE_AOF/REPL，
+ *    那么即使命令没有修改数据集，命令也会被传播。
+ * 2. 如果客户端标志设置了 CLIENT_PREVENT_REPL_PROP 或 CLIENT_PREVENT_AOF_PROP，
+ *    那么即使命令修改了数据集，也不会传播到 AOF 或从节点。
+ *
+ * 注意：无论客户端标志如何，如果没有设置 CMD_CALL_PROPAGATE_AOF 或
+ * CMD_CALL_PROPAGATE_REPL，则不会进行 AOF 或从节点的传播。
+ *
+ * 客户端标志由命令的具体实现通过以下 API 修改：
+ *
+ * forceCommandPropagation(client *c, int flags); // 强制命令传播
+ * preventCommandPropagation(client *c);         // 阻止命令传播
+ * preventCommandAOF(client *c);                 // 阻止命令传播到 AOF
+ * preventCommandReplication(client *c);         // 阻止命令传播到从节点
+ *
+ */
 void call(client *c, int flags) {
     long long dirty;
     int client_old_flags = c->flags;
@@ -3823,7 +3873,7 @@ void call(client *c, int flags) {
     if (!(c->flags & CLIENT_BLOCKED))
         freeClientOriginalArgv(c);
 
-    /* populate the per-command statistics that we show in INFO commandstats. */
+    /* 填充每个命令的统计信息，这些信息会在 INFO commandstats 中显示。 */ /* populate the per-command statistics that we show in INFO commandstats. */
     if (flags & CMD_CALL_STATS) {
         real_cmd->microseconds += duration;
         real_cmd->calls++;
@@ -6463,7 +6513,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Warning the user about suspicious maxmemory setting. */
+    /* Warning the user about suspicious aeSetBeforeSleepProc setting. */
     if (server.maxmemory > 0 && server.maxmemory < 1024*1024) {
         serverLog(LL_WARNING,"WARNING: You specified a maxmemory value that is less than 1MB (current value is %llu bytes). Are you sure this is what you really want?", server.maxmemory);
     }

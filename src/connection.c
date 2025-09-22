@@ -171,6 +171,9 @@ static int connSocketWrite(connection *conn, const void *data, size_t data_len) 
         /* Don't overwrite the state of a connection that is not already
          * connected, not to mess with handler callbacks.
          */
+        /* 不要覆盖尚未连接的连接状态，
+         * 以免干扰处理器回调。
+         */
         if (conn->state == CONN_STATE_CONNECTED)
             conn->state = CONN_STATE_ERROR;
     }
@@ -215,6 +218,14 @@ static int connSocketAccept(connection *conn, ConnectionCallbackFunc accept_hand
  * CONN_FLAG_WRITE_BARRIER set. This will ensure that the write handler is
  * always called before and not after the read handler in a single event
  * loop.
+ */
+/* 注册一个写事件处理器，当连接变为可写时调用。
+ * 如果传入 NULL，则移除现有的处理器。
+ *
+ * barrier 标志表示请求写屏障（write barrier），
+ * 这会导致设置 CONN_FLAG_WRITE_BARRIER 标志。
+ * 写屏障确保在单次事件循环中，写事件处理器总是
+ * 在读事件处理器之前被调用，而不是之后。
  */
 static int connSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier) {
     if (func == conn->write_handler) return C_OK;

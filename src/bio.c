@@ -57,7 +57,32 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
+/* Redis 的后台 I/O 服务。
+ *
+ * 这个文件实现了需要在后台执行的操作。
+ * 当前只有一个操作，即后台执行的 close(2) 系统调用。
+ * 这是必要的，因为当进程是文件引用的最后一个拥有者时，
+ * 关闭文件意味着解除链接（unlink），而文件的删除过程较慢，
+ * 会阻塞服务器。
+ *
+ * 未来我们可能会继续实现需要的新功能，或者切换到使用 libeio。
+ * 然而，这个文件可能会有长期用途，因为我们可能会在这里
+ * 放置 Redis 特定的后台任务（例如，未来可能需要一个非阻塞的
+ * FLUSHDB/FLUSHALL 实现）。
+ *
+ * 设计
+ * ------
+ *
+ * 设计非常简单，我们有一个结构体表示需要执行的任务，
+ * 并为每种任务类型分配一个独立的线程和任务队列。
+ * 每个线程等待其队列中的新任务，并按顺序处理每个任务。
+ *
+ * 同一类型的任务保证按照插入时间的顺序处理，
+ * 即最早插入的任务会最先被处理（先到先处理）。
+ *
+ * 当前，任务的创建者无法被通知操作完成的情况，
+ * 只有在需要时才会添加这种功能。
+ */
 #include "server.h"
 #include "bio.h"
 
@@ -72,6 +97,12 @@ static list *bio_jobs[BIO_NUM_OPS];
  * objects shared with the background thread. The main thread will just wait
  * that there are no longer jobs of this type to be executed before performing
  * the sensible operation. This data is also useful for reporting. */
+/* 以下数组用于保存每种操作类型（OP type）的待处理任务数量。
+ * 这使得我们可以通过 bioPendingJobsOfType() API 导出该信息，
+ * 当主线程需要执行某些可能涉及与后台线程共享对象的操作时，这非常有用。
+ * 主线程会等待，直到不再有此类型的任务需要执行后，再执行相关的敏感操作。
+ * 此数据还可用于报告用途。
+ */
 static unsigned long long bio_pending[BIO_NUM_OPS];
 
 /* This structure represents a background Job. It is only used locally to this
@@ -209,7 +240,7 @@ void *bioProcessBackgroundJobs(void *arg) {
             pthread_cond_wait(&bio_newjob_cond[type],&bio_mutex[type]);
             continue;
         }
-        /* Pop the job from the queue. */
+        /* 从队列中弹出任务。 */ /* Pop the job from the queue. */
         ln = listFirst(bio_jobs[type]);
         job = ln->value;
         /* It is now possible to unlock the background system as we know have

@@ -1,3 +1,16 @@
+/**
+ * 
+ * 这段代码是一个 C 语言头文件的注释部分，描述了如何使用 C11 的 _Atomic、__atomic 或 __sync 宏来实现原子计数器（atomic counters）。如果这些功能不可用，编译时会抛出错误。
+ * 导出的接口（宏）：
+ * atomicIncr(var, count)：将原子计数器 var 增加 count。
+ * atomicGetIncr(var, oldvalue_var, count)：获取原子计数器的当前值到 oldvalue_var，然后将计数器增加 count。
+ * atomicDecr(var, count)：将原子计数器 var 减少 count。
+ * atomicGet(var, dstvar)：获取原子计数器的值到 dstvar。
+ * atomicSet(var, value)：将原子计数器设置为 value。
+ * atomicGetWithSync(var, value)：带有线程同步的 atomicGet 操作。
+ * atomicSetWithSync(var, value)：带有线程同步的 atomicSet 操作。
+ */
+
 /* This file implements atomic counters using c11 _Atomic, __atomic or __sync
  * macros if available, otherwise we will throw an error when compile.
  *
@@ -55,8 +68,13 @@
 #ifndef __ATOMIC_VAR_H
 #define __ATOMIC_VAR_H
 
-/* Define redisAtomic for atomic variable. */
+/* 定义 redisAtomic 用于原子变量。 */ /* Define redisAtomic for atomic variable. */
 #define redisAtomic
+
+/* 为了使用 Helgrind（一个 Valgrind 工具）测试 Redis，定义以下宏是有用的，
+ * 这样可以强制使用 __sync 宏：这些宏可以被 Helgrind 检测到
+ * （尽管它们效率较低），从而避免报告误报。 */
+// #define __ATOMIC_VAR_FORCE_SYNC_MACROS
 
 /* To test Redis with Helgrind (a Valgrind tool) it is useful to define
  * the following macro, so that __sync macros are used: those can be detected
@@ -74,6 +92,12 @@
  *
  * These macros take effect only when 'make helgrind', and you must first
  * install Valgrind in the default path configuration. */
+
+/**
+ * 这段注释解释了在使用 Helgrind（Valgrind 的一个工具）测试 Redis 时可能遇到的问题。由于 Helgrind 无法自动理解程序中已经定义的线程间执行顺序（happens-before 关系），会导致许多误报。
+ * 为了解决这个问题，代码中引入了 helgrind.h 中的宏，用来显式地向 Helgrind 描述线程间的关系，从而避免误报。
+ * 此外，这些宏只有在执行 make helgrind 时才会生效，并且需要确保 Valgrind 已正确安装。
+ */
 #ifdef __ATOMIC_VAR_FORCE_SYNC_MACROS
 #include <valgrind/helgrind.h>
 #else
@@ -89,7 +113,7 @@
 /* Implementation using _Atomic in C11. */
 
 #include <stdatomic.h>
-#define atomicIncr(var,count) atomic_fetch_add_explicit(&var,(count),memory_order_relaxed)
+#define atomicIncr(var,count) atomic_fetch_add_explicit(&var,(count),memory_order_relaxed) // 这是一个 C11 标准的原子操作函数，用于对变量执行加法操作。
 #define atomicGetIncr(var,oldvalue_var,count) do { \
     oldvalue_var = atomic_fetch_add_explicit(&var,(count),memory_order_relaxed); \
 } while(0)

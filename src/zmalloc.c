@@ -83,7 +83,7 @@ void zlibc_free(void *ptr) {
 #define update_zmalloc_stat_alloc(__n) atomicIncr(used_memory,(__n))
 #define update_zmalloc_stat_free(__n) atomicDecr(used_memory,(__n))
 
-static redisAtomic size_t used_memory = 0;
+static redisAtomic size_t used_memory = 0; // Redis 已分配的内存总量。通过原子操作进行减少或者释放内存的大小。
 
 static void zmalloc_default_oom(size_t size) {
     fprintf(stderr, "zmalloc: Out of memory trying to allocate %zu bytes\n",
@@ -94,6 +94,8 @@ static void zmalloc_default_oom(size_t size) {
 
 static void (*zmalloc_oom_handler)(size_t) = zmalloc_default_oom;
 
+/* 尝试分配内存，如果失败则返回 NULL。
+ * 如果参数 'usable' 不为 NULL，则将可用的内存大小设置到 '*usable' 中。 */
 /* Try allocating memory, and return NULL if failed.
  * '*usable' is set to the usable size if non NULL. */
 void *ztrymalloc_usable(size_t size, size_t *usable) {
@@ -102,11 +104,11 @@ void *ztrymalloc_usable(size_t size, size_t *usable) {
 
     if (!ptr) return NULL;
 #ifdef HAVE_MALLOC_SIZE
-    size = zmalloc_size(ptr);
+    size = zmalloc_size(ptr); // 获取分配的内存的实际大小，内存分配器通常会分配对齐后的内存块，因此实际分配的大小可能会大于用户请求的大小。
     update_zmalloc_stat_alloc(size);
     if (usable) *usable = size;
     return ptr;
-#else
+#else // 返回用户请求的内存块起始地址。如果系统不提供 zmalloc_size 的函数，无法获取实际分配的，只能统计每次分配用户请求的大小。
     *((size_t*)ptr) = size;
     update_zmalloc_stat_alloc(size+PREFIX_SIZE);
     if (usable) *usable = size;
@@ -114,11 +116,11 @@ void *ztrymalloc_usable(size_t size, size_t *usable) {
 #endif
 }
 
-/* Allocate memory or panic */
+/* 分配内存或触发崩溃 */ /* Allocate memory or panic */
 void *zmalloc(size_t size) {
     void *ptr = ztrymalloc_usable(size, NULL);
     if (!ptr) zmalloc_oom_handler(size);
-    return ptr;
+    return ptr; // 返回分配的指针
 }
 
 /* Try allocating memory, and return NULL if failed. */

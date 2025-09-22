@@ -136,6 +136,14 @@ static inline int connBlockingConnect(connection *conn, const char *addr, int po
  * The caller should NOT rely on errno. Testing for an EAGAIN-like condition, use
  * connGetState() to see if the connection state is still CONN_STATE_CONNECTED.
  */
+/* 写入连接，行为与 write(2) 相同。
+ *
+ * 与 write(2) 一样，可能会发生短写（short write）。
+ * 返回值为 -1 表示发生错误。
+ *
+ * 调用者不应依赖 errno。如果需要检查是否是 EAGAIN 类似的情况，
+ * 请使用 connGetState() 查看连接状态是否仍为 CONN_STATE_CONNECTED。
+ */
 static inline int connWrite(connection *conn, const void *data, size_t data_len) {
     return conn->type->write(conn, data, data_len);
 }

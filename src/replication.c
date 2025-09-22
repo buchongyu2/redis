@@ -213,6 +213,10 @@ int canFeedReplicaReplBuffer(client *replica) {
  * the commands received by our clients in order to create the replication
  * stream. Instead if the instance is a slave and has sub-slaves attached,
  * we use replicationFeedSlavesFromMasterStream() */
+/* 将写命令传播到从节点，同时填充复制积压缓冲区。
+ * 如果当前实例是主节点，则使用客户端发送的命令来创建复制流。
+ * 如果当前实例是从节点且有子从节点，则使用
+ * replicationFeedSlavesFromMasterStream() 函数来传播主节点的复制流。 */
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listNode *ln;
     listIter li;
@@ -233,7 +237,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     /* We can't have slaves attached and no backlog. */
     serverAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
 
-    /* Send SELECT command to every slave if needed. */
+    /* 如果需要，向每个从节点发送 SELECT 命令。 */ /* Send SELECT command to every slave if needed. */
     if (server.slaveseldb != dictid) {
         robj *selectcmd;
 
@@ -637,6 +641,21 @@ need_full_resync:
  *    started.
  *
  * Returns C_OK on success or C_ERR otherwise. */
+/* 为复制目标启动一个 BGSAVE（后台保存），根据配置选择磁盘或套接字作为目标，
+ * 并确保在开始之前清空脚本缓存。
+ *
+ * 参数 mincapa 是所有等待此 BGSAVE 的从节点能力的按位与结果，
+ * 表示所有从节点支持的能力。可以通过 SLAVE_CAPA_* 宏进行测试。
+ *
+ * 除了启动 BGSAVE 之外的副作用：
+ *
+ * 1) 处理处于 WAIT_START 状态的从节点：
+ *    如果 BGSAVE 成功启动，则为它们准备全量同步；
+ *    如果启动失败，则向它们发送错误信息并将它们从从节点列表中移除。
+ *
+ * 2) 如果 BGSAVE 实际启动，则清空 Lua 脚本的脚本缓存。
+ *
+ * 成功时返回 C_OK，否则返回 C_ERR。 */
 int startBgsaveForReplication(int mincapa) {
     int retval;
     int socket_target = server.repl_diskless_sync && (mincapa & SLAVE_CAPA_EOF);
@@ -650,6 +669,8 @@ int startBgsaveForReplication(int mincapa) {
     rsiptr = rdbPopulateSaveInfo(&rsi);
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise slave will miss repl-stream-db. */
+    /* 仅当 rsiptr 不为 NULL 时才执行 rdbSave*，
+     * 否则从节点将会丢失 repl-stream-db。 */
     if (rsiptr) {
         if (socket_target)
             retval = rdbSaveToSlavesSockets(rsiptr);
@@ -710,6 +731,7 @@ int startBgsaveForReplication(int mincapa) {
 }
 
 /* SYNC and PSYNC command implementation. */
+/** SYNC 和 PSYNC 命令的实现， syncCommand 函数的实现*/
 void syncCommand(client *c) {
     /* ignore SYNC if already slave or in monitor mode */
     if (c->flags & CLIENT_SLAVE) return;
@@ -1370,7 +1392,9 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
                 slave->replstate = SLAVE_STATE_SEND_BULK;
                 slave->replpreamble = sdscatprintf(sdsempty(),"$%lld\r\n",
                     (unsigned long long) slave->repldbsize);
-
+                /**
+                 * 为从节点（slave）的连接设置一个写处理器（write handler），以非阻塞的方式将数据（例如 RDB 文件或命令流）发送给从节点。以下是详细的分析：
+                 */
                 connSetWriteHandler(slave->conn,NULL);
                 if (connSetWriteHandler(slave->conn,sendBulkToSlave) == C_ERR) {
                     freeClientAsync(slave);
@@ -3163,6 +3187,10 @@ int replicationScriptCacheExists(sds sha1) {
  * to all the slaves in the beforeSleep() function. Note that this way
  * we "group" all the clients that want to wait for synchronous replication
  * in a given event loop iteration, and send a single GETACK for them all. */
+/* redis 主节点中执行
+ * 这段代码只是设置一个标志，用于在 beforeSleep() 函数中向所有从节点广播 REPLCONF GETACK 命令。
+ * 注意，这种方式会将所有希望等待同步复制的客户端“分组”到当前事件循环的一个迭代中，
+ * 并为它们发送一个单独的 GETACK 命令。 */
 void replicationRequestAckFromSlaves(void) {
     server.get_ack_from_slaves = 1;
 }

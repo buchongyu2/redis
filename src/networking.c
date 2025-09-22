@@ -353,8 +353,14 @@ void _addReplyProtoToList(client *c, const char *s, size_t len) {
  * Higher level functions to queue data on the client output buffer.
  * The following functions are the ones that commands implementations will call.
  * -------------------------------------------------------------------------- */
-
 /* Add the object 'obj' string representation to the client output buffer. */
+
+/* -----------------------------------------------------------------------------
+ * 用于将数据排入客户端输出缓冲区的高层函数。
+ * 以下函数是命令实现会调用的函数。
+ * -------------------------------------------------------------------------- */
+
+/* 将对象 'obj' 的字符串表示添加到客户端输出缓冲区中。 */
 void addReply(client *c, robj *obj) {
     if (prepareClientToWrite(c) != C_OK) return;
 
@@ -365,6 +371,8 @@ void addReply(client *c, robj *obj) {
         /* For integer encoded strings we just convert it into a string
          * using our optimized function, and attach the resulting string
          * to the output buffer. */
+        /* 对于整数编码的字符串，我们会使用优化过的函数将其转换为字符串，
+         * 然后将生成的字符串附加到输出缓冲区中。 */
         char buf[32];
         size_t len = ll2string(buf,sizeof(buf),(long)obj->ptr);
         if (_addReplyToBuffer(c,buf,len) != C_OK)

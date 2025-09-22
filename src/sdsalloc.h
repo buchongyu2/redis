@@ -1,4 +1,5 @@
-/* SDSLib 2.0 -- A C dynamic strings library
+/* [SDSLib 2.0 —— 一个用 C 语言实现的动态字符串库]
+ * SDSLib 2.0 -- A C dynamic strings library
  *
  * Copyright (c) 2006-2015, Salvatore Sanfilippo <antirez at gmail dot com>
  * Copyright (c) 2015, Redis Labs, Inc

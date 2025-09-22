@@ -44,7 +44,19 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-
+/* rio.c 是一个简单的面向流的 I/O 抽象，它提供了一个接口，
+ * 用于编写可以使用不同具体输入和输出设备来消费/生成数据的代码。
+ * 例如，使用 rio 抽象的相同 rdb.c 代码可以通过内存缓冲区或文件
+ * 来读写 RDB 格式的数据。
+ *
+ * 一个 rio 对象提供以下方法：
+ *  read: 从流中读取数据。
+ *  write: 向流中写入数据。
+ *  tell: 获取当前的偏移量。
+ *
+ * 还可以设置一个 'checksum' 方法，rio.c 使用该方法来计算写入或读取数据的校验和，
+ * 或者查询 rio 对象的当前校验和。
+ */
 #include "fmacros.h"
 #include <string.h>
 #include <stdio.h>

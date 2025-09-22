@@ -248,6 +248,15 @@ int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
  *    Much better but still insertion or deletion of timers is O(N).
  * 2) Use a skiplist to have this operation as O(1) and insertion as O(log(N)).
  */
+/* 距离第一个定时器触发还有多少微秒。
+ * 如果没有定时器，则返回 -1。
+ *
+ * 注意，这个操作是 O(N) 的，因为时间事件是无序的。
+ * 可能的优化（目前 Redis 不需要，但可以考虑）：
+ * 1) 按顺序插入事件，这样最近的事件就在头部。
+ *    这种方法更好，但插入或删除定时器的操作仍然是 O(N)。
+ * 2) 使用跳表（skiplist），使该操作为 O(1)，插入操作为 O(log(N))。
+ */
 static int64_t usUntilEarliestTimer(aeEventLoop *eventLoop) {
     aeTimeEvent *te = eventLoop->timeEventHead;
     if (te == NULL) return -1;
@@ -345,6 +354,25 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
  * if flags has AE_CALL_BEFORE_SLEEP set, the beforesleep callback is called.
  *
  * The function returns the number of events processed. */
+/* 
+ * 处理所有待处理的时间事件，然后处理所有待处理的文件事件
+ * （这些文件事件可能是刚刚处理的时间事件回调中注册的）。
+ * 如果没有特殊标志，该函数会休眠，直到某个文件事件触发，
+ * 或者下一个时间事件发生（如果有的话）。
+ *
+ * 如果 flags 为 0，该函数不执行任何操作并返回。
+ * 如果 flags 设置了 AE_ALL_EVENTS，则处理所有类型的事件。
+ * 如果 flags 设置了 AE_FILE_EVENTS，则处理文件事件。
+ * 如果 flags 设置了 AE_TIME_EVENTS，则处理时间事件。
+ * 如果 flags 设置了 AE_DONT_WAIT，则函数会尽快返回，
+ * 在此期间处理所有无需等待即可处理的事件。
+ * 如果 flags 设置了 AE_CALL_AFTER_SLEEP，则调用 aftersleep 回调。
+ * 如果 flags 设置了 AE_CALL_BEFORE_SLEEP，则调用 beforesleep 回调。
+ *
+ * 该函数返回处理的事件数量。
+ * 
+ * 先处理文件时间，在处理时间事件;
+ */
 int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 {
     int processed = 0, numevents;
@@ -356,6 +384,8 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
      * file events to process as long as we want to process time
      * events, in order to sleep until the next time event is ready
      * to fire. */
+    /* 注意，即使没有文件事件需要处理，只要我们需要处理时间事件，
+      * 我们仍然会调用 select()，以便休眠直到下一个时间事件准备好触发。 */
     if (eventLoop->maxfd != -1 ||
         ((flags & AE_TIME_EVENTS) && !(flags & AE_DONT_WAIT))) {
         int j;
@@ -373,6 +403,8 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             /* If we have to check for events but need to return
              * ASAP because of AE_DONT_WAIT we need to set the timeout
              * to zero */
+            /* 如果我们需要检查事件，但由于设置了 AE_DONT_WAIT 需要尽快返回，
+             * 则需要将超时时间设置为 0。 */
             if (flags & AE_DONT_WAIT) {
                 tv.tv_sec = tv.tv_usec = 0;
                 tvp = &tv;
@@ -386,15 +418,18 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             tv.tv_sec = tv.tv_usec = 0;
             tvp = &tv;
         }
-
+        /**
+         * 注册的 beforesleep 回调函数。即执行 serverCron 函数
+         */
         if (eventLoop->beforesleep != NULL && flags & AE_CALL_BEFORE_SLEEP)
             eventLoop->beforesleep(eventLoop);
 
         /* Call the multiplexing API, will return only on timeout or when
          * some event fires. */
+        /* 调用多路复用 API，仅在超时或某些事件触发时返回。 */
         numevents = aeApiPoll(eventLoop, tvp);
 
-        /* After sleep callback. */
+        /* sleep callback 的后处理函数...  After sleep callback. */
         if (eventLoop->aftersleep != NULL && flags & AE_CALL_AFTER_SLEEP)
             eventLoop->aftersleep(eventLoop);
 
@@ -415,6 +450,13 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
              * This is useful when, for instance, we want to do things
              * in the beforeSleep() hook, like fsyncing a file to disk,
              * before replying to a client. */
+            /* 通常情况下，我们会先执行可读事件（readable event），然后再执行可写事件（writable event）。
+             * 这样做很有用，因为有时我们可以在处理查询后立即返回查询的回复。
+             *
+             * 然而，如果在事件掩码中设置了 AE_BARRIER 标志，我们的应用程序会要求我们反转顺序：
+             * 永远不要在可读事件之后触发可写事件。在这种情况下，我们会反转调用顺序。
+             * 这在某些情况下非常有用，例如我们希望在 beforeSleep() 钩子中执行一些操作（比如将文件通过 fsync 同步到磁盘），
+             * 然后再回复客户端。 */
             int invert = fe->mask & AE_BARRIER;
 
             /* Note the "fe->mask & mask & ..." code: maybe an already
@@ -423,6 +465,11 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
              *
              * Fire the readable event if the call sequence is not
              * inverted. */
+            /* 注意这里的 "fe->mask & mask & ..." 代码：可能一个已经处理过的事件
+             * 移除了一个触发的元素，而我们还没有处理它，所以我们需要检查
+             * 该事件是否仍然有效。
+             *
+             * 如果调用顺序没有被反转，则触发可读事件。 */
             if (!invert && fe->mask & mask & AE_READABLE) {
                 fe->rfileProc(eventLoop,fd,fe->clientData,mask);
                 fired++;
@@ -436,7 +483,7 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
                     fired++;
                 }
             }
-
+            // 如果我们需要反转调用顺序，则在可写事件之后立即触发可读事件。
             /* If we have to invert the call, fire the readable event now
              * after the writable one. */
             if (invert) {

@@ -679,13 +679,14 @@ typedef struct RedisModuleDigest {
 #define OBJ_STATIC_REFCOUNT (INT_MAX-1) /* Object allocated in the stack. */
 #define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
 typedef struct redisObject {
-    unsigned type:4;
-    unsigned encoding:4;
+    unsigned type:4;       // 对象类型，占 4 位。 OBJ_STRING、OBJ_LIST、OBJ_SET、OBJ_ZSET、OBJ_HASH、OBJ_MODULE、OBJ_STREAM
+    unsigned encoding:4;   // 对象编码，占 4 位。 OBJ_ENCODING_RAW、OBJ_ENCODING_INT、OBJ_ENCODING_HT、OBJ_ENCODING_ZIPMAP、OBJ_ENCODING_ZIPLIST、OBJ_ENCODING_INTSET等
     unsigned lru:LRU_BITS; /* LRU time (relative to global lru_clock) or
                             * LFU data (least significant 8 bits frequency
                             * and most significant 16 bits access time). */
-    int refcount;
-    void *ptr;
+                           // LRU 时间（相对于全局 lru_clock）或 LFU 数据（低 8 位表示访问频率，高 16 位表示访问时间）。
+    int refcount;          // 引用计数
+    void *ptr;             // 实际存储的数据指针
 } robj;
 
 /* The a string name for an object's type as listed above
@@ -1457,7 +1458,7 @@ struct redisServer {
     int repl_min_slaves_to_write;   /* Min number of slaves to write. */
     int repl_min_slaves_max_lag;    /* Max lag of <count> slaves to write. */
     int repl_good_slaves_count;     /* Number of slaves with lag <= max_lag. */
-    int repl_diskless_sync;         /* Master send RDB to slaves sockets directly. */
+    int repl_diskless_sync;         /* 主节点直接将 RDB 发送到从节点的套接字。 */ /* Master send RDB to slaves sockets directly. */
     int repl_diskless_load;         /* Slave parse RDB directly from the socket.
                                      * see REPL_DISKLESS_LOAD_* enum */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
@@ -1499,7 +1500,7 @@ struct redisServer {
     unsigned int repl_scriptcache_size; /* Max number of elements. */
     /* Synchronous replication. */
     list *clients_waiting_acks;         /* Clients waiting in WAIT command. */
-    int get_ack_from_slaves;            /* If true we send REPLCONF GETACK. */
+    int get_ack_from_slaves;            /* 如果为 true，则发送 REPLCONF GETACK。 */ /* If true we send REPLCONF GETACK. */
     /* Limits */
     unsigned int maxclients;            /* Max number of simultaneous clients */
     unsigned long long maxmemory;   /* Max number of memory bytes to use */
