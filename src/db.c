@@ -1039,6 +1039,9 @@ void lastsaveCommand(client *c) {
     addReplyLongLong(c,server.lastsave);
 }
 
+/* 获取对象类型的字符串名称（如上所列）。
+ * 原生类型会根据 OBJ_STRING、OBJ_LIST、OBJ_* 等宏进行判断，
+ * 模块类型则返回其注册的名称。 */
 char* getObjectTypeName(robj *o) {
     char* type;
     if (o == NULL) {
@@ -1409,6 +1412,8 @@ int removeExpire(redisDb *db, robj *key) {
  * of an user calling a command 'c' is the client, otherwise 'c' is set
  * to NULL. The 'when' parameter is the absolute unix time in milliseconds
  * after which the key will no longer be considered valid. */
+/* 为指定的键设置过期时间。如果是在用户调用命令的上下文中，'c' 是客户端，否则为 NULL。
+ * 'when' 参数是绝对的 Unix 毫秒时间，超过该时间后键将不再有效。 */
 void setExpire(client *c, redisDb *db, robj *key, long long when) {
     dictEntry *kde, *de;
 
@@ -1423,7 +1428,8 @@ void setExpire(client *c, redisDb *db, robj *key, long long when) {
         rememberSlaveKeyWithExpire(db,key);
 }
 
-/* Return the expire time of the specified key, or -1 if no expire
+/* 返回指定键的过期时间，如果没有设置过期（即键是持久的），则返回 -1。 */
+ /* Return the expire time of the specified key, or -1 if no expire
  * is associated with this key (i.e. the key is non volatile) */
 long long getExpire(redisDb *db, robj *key) {
     dictEntry *de;
@@ -1438,7 +1444,7 @@ long long getExpire(redisDb *db, robj *key) {
     return dictGetSignedIntegerVal(de);
 }
 
-/* Delete the specified expired key and propagate expire. */
+/* 删除指定的过期键，并传播删除操作。 */ /* Delete the specified expired key and propagate expire. */
 void deleteExpiredKeyAndPropagate(redisDb *db, robj *keyobj) {
     mstime_t expire_latency;
     latencyStartMonitor(expire_latency);
@@ -1462,6 +1468,11 @@ void deleteExpiredKeyAndPropagate(redisDb *db, robj *keyobj) {
  * AOF and the master->slave link guarantee operation ordering, everything
  * will be consistent even if we allow write operations against expiring
  * keys. */
+/* 将过期操作传播到从节点和 AOF 文件。
+ * 当主节点上的键过期时，会向所有从节点和 AOF 文件发送 DEL 操作（如果启用）。
+ *
+ * 这样键的过期由主节点统一管理，并且由于 AOF 和主从链路保证操作顺序，
+ * 即使允许对即将过期的键进行写操作，也能保证一致性。 */
 void propagateExpire(redisDb *db, robj *key, int lazy) {
     robj *argv[2];
 
@@ -1474,23 +1485,27 @@ void propagateExpire(redisDb *db, robj *key, int lazy) {
      * Even if module executed a command without asking for propagation. */
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
-    propagate(server.delCommand,db->id,argv,2,PROPAGATE_AOF|PROPAGATE_REPL);
+    propagate(server.delCommand,db->id,argv,2,PROPAGATE_AOF|PROPAGATE_REPL); // 命令传播删除命令
     server.replication_allowed = prev_replication_allowed;
 
     decrRefCount(argv[0]);
     decrRefCount(argv[1]);
 }
 
-/* Check if the key is expired. */
+/* 检查指定的键是否已过期。 */ /* Check if the key is expired. */
 int keyIsExpired(redisDb *db, robj *key) {
     mstime_t when = getExpire(db,key);
     mstime_t now;
 
-    if (when < 0) return 0; /* No expire for this key */
+    if (when < 0) return 0; /* 此键没有过期时间 */ /* No expire for this key */
 
-    /* Don't expire anything while loading. It will be done later. */
+    /* 加载期间不检查过期，稍后再处理。 */ /* Don't expire anything while loading. It will be done later. */
     if (server.loading) return 0;
 
+    /* 如果当前处于 Lua 脚本上下文，则假定时间冻结在脚本开始时。
+     * 这样键只会在第一次访问时过期，不会在脚本执行过程中间过期，
+     * 保证向从节点/AOF传播的一致性。
+     * 更多信息见 Github issue #1525。 */
     /* If we are in the context of a Lua script, we pretend that time is
      * blocked to when the Lua script started. This way a key can expire
      * only the first time it is accessed and not in the middle of the
@@ -1506,15 +1521,19 @@ int keyIsExpired(redisDb *db, robj *key) {
      * may re-open the same key multiple times, can invalidate an already
      * open object in a next call, if the next call will see the key expired,
      * while the first did not. */
+    /* 如果正在执行命令，也希望使用不变的参考时间：此时使用缓存时间，
+     * 在 call() 函数每次调用前更新。
+     * 这样可以避免像 RPOPLPUSH 这类命令多次打开同一个键时，
+     * 后续调用发现键过期而前一次没有，导致对象失效。 */
     else if (server.fixed_time_expire > 0) {
         now = server.mstime;
     }
-    /* For the other cases, we want to use the most fresh time we have. */
+    /* 其他情况则使用最新的时间。 */ /* For the other cases, we want to use the most fresh time we have. */
     else {
         now = mstime();
     }
 
-    /* The key expired if the current (virtual or real) time is greater
+    /* 如果当前（虚拟或真实）时间大于键的过期时间，则键已过期。 */ /* The key expired if the current (virtual or real) time is greater
      * than the expire time of the key. */
     return now > when;
 }
@@ -1538,6 +1557,29 @@ int keyIsExpired(redisDb *db, robj *key) {
  *
  * The return value of the function is 0 if the key is still valid,
  * otherwise the function returns 1 if the key is expired. */
+/**
+ * 客户端会被暂停主要有以下几种情况：
+ *
+ * 执行 CLIENT PAUSE 命令时
+ * 管理员可以通过 CLIENT PAUSE 命令暂停所有客户端的读写操作，用于故障转移、维护等场景。
+ * 服务器正在进行某些关键操作
+ * 比如在主从切换、AOF重写、RDB持久化等过程中，可能会临时暂停客户端，确保数据一致性或安全。
+
+ * 某些特殊的复制或集群状态
+ * 在某些复制或集群事件发生时，为了保证一致性，也可能会暂停客户端。
+ *暂停期间，客户端的命令不会被立即执行，等暂停结束后才会恢复正常处理。
+ */
+/* 当我们要对某个键执行操作时，会调用此函数，但该键可能已经逻辑过期，即使它还存在于数据库中。
+ * 此函数主要通过 lookupKey*() 系列函数调用。
+ *
+ * 函数行为取决于实例的复制角色，因为从节点不会主动过期键，为了保持一致性，它们会等待主节点发送 DEL 操作。
+ * 但即使是从节点，也会尝试返回一致的结果，这样在从节点执行读命令时，
+ * 即使键还在，也会表现得像已经过期（因为主节点还没同步 DEL）。
+ *
+ * 在主节点上，如果发现键已过期，会将其从数据库中移除，并可能触发在 AOF/复制流中传播 DEL/UNLINK 命令。
+ *
+ * 如果键仍然有效，函数返回 0；如果键已过期，返回 1。
+ */
 int expireIfNeeded(redisDb *db, robj *key) {
     if (!keyIsExpired(db,key)) return 0;
 
@@ -1549,15 +1591,23 @@ int expireIfNeeded(redisDb *db, robj *key) {
      * Still we try to return the right information to the caller,
      * that is, 0 if we think the key should be still valid, 1 if
      * we think the key is expired at this time. */
+    /* 如果当前是从节点，不会主动删除过期键，直接返回。
+     * 从节点的键过期由主节点控制，主节点会发送 DEL 操作。
+     *
+     * 但仍然会尝试返回正确的信息：如果认为键有效返回 0，认为已过期返回 1。 
+     * 
+     * TODO: 通过 server.masterhost 判断当前是否为从节点。*/
     if (server.masterhost != NULL) return 1;
 
     /* If clients are paused, we keep the current dataset constant,
      * but return to the client what we believe is the right state. Typically,
      * at the end of the pause we will properly expire the key OR we will
      * have failed over and the new primary will send us the expire. */
+    /* 如果客户端被暂停，保持当前数据集不变，但返回我们认为正确的状态。
+     * 通常在暂停结束后会正确过期键，或者发生故障转移由新主节点发送过期。 */
     if (checkClientPauseTimeoutAndReturnIfPaused()) return 1;
 
-    /* Delete the key */
+    /* 删除过期键 */ /* Delete the key */
     deleteExpiredKeyAndPropagate(db,key);
     return 1;
 }
@@ -1983,6 +2033,8 @@ unsigned int getKeysInSlot(unsigned int hashslot, robj **keys, unsigned int coun
 
 /* Remove all the keys in the specified hash slot.
  * The number of removed items is returned. */
+/* 移除指定哈希槽中的所有键。
+ * 返回移除的键数量。 */
 unsigned int delKeysInSlot(unsigned int hashslot) {
     raxIterator iter;
     int j = 0;

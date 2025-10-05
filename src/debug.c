@@ -1977,13 +1977,24 @@ void watchdogSignalHandler(int sig, siginfo_t *info, void *secret) {
 /* Schedule a SIGALRM delivery after the specified period in milliseconds.
  * If a timer is already scheduled, this function will re-schedule it to the
  * specified time. If period is 0 the current timer is disabled. */
+/* 在指定的毫秒周期后安排发送 SIGALRM 信号。
+ * 如果已经有定时器被安排，此函数会重新安排到指定时间。
+ * 如果 period 为 0，则会禁用当前定时器。
+ */
+/*软件看门狗通过以下机制工作：
+
+定时器设置：使用 setitimer(ITIMER_REAL, &it, NULL) 设置一个定时器
+信号处理：当定时器到期时，会发送 SIGALRM 信号
+进程检测：如果 Redis 进程在指定时间内没有重置定时器，说明进程可能卡死
+故障恢复：触发相应的故障处理机制
+*/
 void watchdogScheduleSignal(int period) {
     struct itimerval it;
 
-    /* Will stop the timer if period is 0. */
+    /* 如果 period 为 0，则停止定时器。 */ /* Will stop the timer if period is 0. */
     it.it_value.tv_sec = period/1000;
     it.it_value.tv_usec = (period%1000)*1000;
-    /* Don't automatically restart. */
+     /* 不自动重启定时器。 */ /* Don't automatically restart. */
     it.it_interval.tv_sec = 0;
     it.it_interval.tv_usec = 0;
     setitimer(ITIMER_REAL, &it, NULL);

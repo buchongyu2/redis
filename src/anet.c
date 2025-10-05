@@ -509,10 +509,17 @@ static int anetGenericAccept(char *err, int s, struct sockaddr *sa, socklen_t *l
     return fd;
 }
 
+// 在服务器端接收新的 TCP 连接，其用法和流程如下：
+/**
+ * 调用 anetGenericAccept，从监听 socket s 接收一个新连接，得到新连接的 fd。
+ * 判断连接是 IPv4 还是 IPv6，分别解析客户端 IP 和端口号，保存到 ip 和 port。
+ * 返回新连接的 fd，供后续处理（如创建客户端对象、注册事件等）。
+ */
 int anetTcpAccept(char *err, int s, char *ip, size_t ip_len, int *port) {
     int fd;
     struct sockaddr_storage sa;
     socklen_t salen = sizeof(sa);
+    // 调用底层的 accept 接收新链接
     if ((fd = anetGenericAccept(err,s,(struct sockaddr*)&sa,&salen)) == -1)
         return ANET_ERR;
 

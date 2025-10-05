@@ -76,11 +76,11 @@ struct connection {
     short int flags;
     short int refs;
     int last_errno;
-    void *private_data;
+    void *private_data; // 保存客户端的结构体指针
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
-    int fd;
+    int fd; // 对应的文件描述符，通过文件描述符与 aeEventLoop->events 关联起来。
 };
 
 /* The connection module does not deal with listening and accepting sockets,
@@ -136,7 +136,8 @@ static inline int connBlockingConnect(connection *conn, const char *addr, int po
  * The caller should NOT rely on errno. Testing for an EAGAIN-like condition, use
  * connGetState() to see if the connection state is still CONN_STATE_CONNECTED.
  */
-/* 写入连接，行为与 write(2) 相同。
+/* 
+写入连接，行为与 write(2) 相同。
  *
  * 与 write(2) 一样，可能会发生短写（short write）。
  * 返回值为 -1 表示发生错误。
@@ -163,12 +164,20 @@ static inline int connRead(connection *conn, void *buf, size_t buf_len) {
 /* Register a write handler, to be called when the connection is writable.
  * If NULL, the existing handler is removed.
  */
+/* 注册一个写处理器，当连接可写时被调用。
+ * 如果传入 NULL，则移除已有的处理器。
+ */
 static inline int connSetWriteHandler(connection *conn, ConnectionCallbackFunc func) {
     return conn->type->set_write_handler(conn, func, 0);
 }
 
 /* Register a read handler, to be called when the connection is readable.
  * If NULL, the existing handler is removed.
+ */
+
+/* 注册一个读处理器，当连接可读时被调用。
+ * 如果传入 NULL，则移除已有的处理器。
+ * 这里的set_read_handler指的是： connSocketSetReadHandler 。代码中只有这一个
  */
 static inline int connSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
     return conn->type->set_read_handler(conn, func);

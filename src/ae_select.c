@@ -33,10 +33,11 @@
 #include <string.h>
 
 typedef struct aeApiState {
-    fd_set rfds, wfds;
+    fd_set rfds, wfds; // 原始文件描述符集合
     /* We need to have a copy of the fd sets as it's not safe to reuse
      * FD sets after select(). */
-    fd_set _rfds, _wfds;
+     /* 我们需要保存一份 fd 集合的副本，因为在调用 select() 之后，重用 FD 集合是不安全的。 */
+    fd_set _rfds, _wfds; // 传入给 select() 的副本，会被内核修改，可以认为是临时的
 } aeApiState;
 
 static int aeApiCreate(aeEventLoop *eventLoop) {
@@ -78,23 +79,27 @@ static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
     aeApiState *state = eventLoop->apidata;
     int retval, j, numevents = 0;
 
+    /**
+     * 拷贝文件描述符集合
+     * select会对船队的fds 进行修改，因此这里做了拷贝。
+     */
     memcpy(&state->_rfds,&state->rfds,sizeof(fd_set));
     memcpy(&state->_wfds,&state->wfds,sizeof(fd_set));
 
     retval = select(eventLoop->maxfd+1,
-                &state->_rfds,&state->_wfds,NULL,tvp);
+                &state->_rfds,&state->_wfds,NULL,tvp); // 最后一个参数是超时时间
     if (retval > 0) {
-        for (j = 0; j <= eventLoop->maxfd; j++) {
+        for (j = 0; j <= eventLoop->maxfd; j++) { // 应用程序遍历所有的文件描述符，查找就绪的事件。时间复杂度 O(n)，在活跃连接数较多的情况下，效率急剧下降
             int mask = 0;
-            aeFileEvent *fe = &eventLoop->events[j];
+            aeFileEvent *fe = &eventLoop->events[j]; 
 
-            if (fe->mask == AE_NONE) continue;
-            if (fe->mask & AE_READABLE && FD_ISSET(j,&state->_rfds))
+            if (fe->mask == AE_NONE) continue; // 如果没注册事件则直接跳过
+            if (fe->mask & AE_READABLE && FD_ISSET(j,&state->_rfds)) // 如果注册了可读事件，并且 select 检测到可读时间则返回
                 mask |= AE_READABLE;
-            if (fe->mask & AE_WRITABLE && FD_ISSET(j,&state->_wfds))
+            if (fe->mask & AE_WRITABLE && FD_ISSET(j,&state->_wfds)) // 如果注册了可写事件，并且 select 检测到可写时间则返回
                 mask |= AE_WRITABLE;
-            eventLoop->fired[numevents].fd = j;
-            eventLoop->fired[numevents].mask = mask;
+            eventLoop->fired[numevents].fd = j; // 事件的文件描述符
+            eventLoop->fired[numevents].mask = mask; // 文件描述符上绑定的事件，可读或者可写
             numevents++;
         }
     }

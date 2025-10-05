@@ -31,12 +31,14 @@
 #include <math.h>
 
 /*-----------------------------------------------------------------------------
- * Hash type API
+ *  Hash 类型的 API Hash type API
  *----------------------------------------------------------------------------*/
 
 /* Check the length of a number of objects to see if we need to convert a
  * ziplist to a real hash. Note that we only check string encoded objects
  * as their string length can be queried in constant time. */
+/* 检查一组对象的长度，判断是否需要将 ziplist 转换为真正的哈希表。
+ * 注意只检查字符串编码的对象，因为它们的长度可以常数时间获取。 */
 void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
     int i;
     size_t sum = 0;
@@ -166,7 +168,7 @@ size_t hashTypeGetValueLength(robj *o, sds field) {
     return len;
 }
 
-/* Test if the specified field exists in the given hash. Returns 1 if the field
+/* 测试指定 field 是否存在于给定哈希表中。存在返回 1，不存在返回 0。 */ /* Test if the specified field exists in the given hash. Returns 1 if the field
  * exists, and 0 when it doesn't. */
 int hashTypeExists(robj *o, sds field) {
     if (o->encoding == OBJ_ENCODING_ZIPLIST) {
@@ -239,6 +241,11 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
         if (hashTypeLength(o) > server.hash_max_ziplist_entries)
             hashTypeConvert(o, OBJ_ENCODING_HT);
     } else if (o->encoding == OBJ_ENCODING_HT) {
+        /**
+         * 删除旧数据，保存在新数据中。
+         * 同一个 Key 在 rehash 过程中不会同时存在于旧表（ht[0]）和新表（ht[1]）。
+         * 迁移时，每个 Key 都会从旧表移动到新表，并且只在一个表中存在。查找和插入操作会自动在两个表中选择正确的位置，保证 Key 唯一且不会重复。
+         */
         dictEntry *de = dictFind(o->ptr,field);
         if (de) {
             sdsfree(dictGetVal(de));
@@ -278,6 +285,8 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
 
 /* Delete an element from a hash.
  * Return 1 on deleted and 0 on not found. */
+/* 从哈希表中删除一个元素。
+ * 删除成功返回 1，未找到返回 0。 */
 int hashTypeDelete(robj *o, sds field) {
     int deleted = 0;
 
@@ -309,7 +318,7 @@ int hashTypeDelete(robj *o, sds field) {
     return deleted;
 }
 
-/* Return the number of elements in a hash. */
+/* 返回哈希表中的元素数量。 */ /* Return the number of elements in a hash. */
 unsigned long hashTypeLength(const robj *o) {
     unsigned long length = ULONG_MAX;
 
@@ -450,6 +459,12 @@ sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what) {
     return sdsfromlonglong(vll);
 }
 
+/**
+ * 在数据库中查找指定 key 对应的哈希对象（用于写操作）。
+ * 如果 key 不存在，则新建一个哈希对象并插入数据库。
+ * 如果 key 存在但类型不是哈希，则返回 NULL。
+ * 返回可用于写操作的哈希对象指针。
+ */
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {
     robj *o = lookupKeyWrite(c->db,key);
     if (checkType(c,o,OBJ_HASH)) return NULL;
@@ -637,9 +652,19 @@ void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, ziplistEntry *
 
 
 /*-----------------------------------------------------------------------------
- * Hash type commands
+ * 哈希类型相关命令 Hash type commands
  *----------------------------------------------------------------------------*/
 
+/**
+ * 命令说明
+ * hsetnxCommand 实现了 Redis 的 HSETNX 命令：
+ * 功能：只在指定 field 不存在时，向哈希表添加 field-value 对。
+ * 流程：
+ * 查找或创建哈希对象。
+ * 如果 field 已存在，回复 0（未插入）。
+ * 如果 field 不存在，插入新值，回复 1，并触发相关事件和脏数据计数。
+ * 典型用途：保证某个 field 只被设置一次，类似于“只插入新项”。
+ */
 void hsetnxCommand(client *c) {
     robj *o;
     if ((o = hashTypeLookupWriteOrCreate(c,c->argv[1])) == NULL) return;
@@ -656,6 +681,10 @@ void hsetnxCommand(client *c) {
     }
 }
 
+/**
+ * 一个Key 不能同时存在旧表和新表中
+ * 先删除旧的，再添加新的
+ */
 void hsetCommand(client *c) {
     int i, created = 0;
     robj *o;
@@ -669,9 +698,9 @@ void hsetCommand(client *c) {
     hashTypeTryConversion(o,c->argv,2,c->argc-1);
 
     for (i = 2; i < c->argc; i += 2)
-        created += !hashTypeSet(o,c->argv[i]->ptr,c->argv[i+1]->ptr,HASH_SET_COPY);
+        created += !hashTypeSet(o,c->argv[i]->ptr,c->argv[i+1]->ptr,HASH_SET_COPY); // 先删掉旧值，再更新新值
 
-    /* HMSET (deprecated) and HSET return value is different. */
+    /* HMSET（已废弃）和 HSET 的返回值不同。 */ /* HMSET (deprecated) and HSET return value is different. */
     char *cmdname = c->argv[0]->ptr;
     if (cmdname[1] == 's' || cmdname[1] == 'S') {
         /* HSET */

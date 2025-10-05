@@ -1,4 +1,4 @@
-/* adlist.h - A generic doubly linked list implementation
+/* 通用的双向链表的实现 -- adlist.h - A generic doubly linked list implementation
  *
  * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -32,11 +32,12 @@
 #define __ADLIST_H__
 
 /* Node, List, and Iterator are the only data structures used currently. */
-
+/*在当前实现中，链表只用到了三种数据结构：节点（Node）、链表（List）、迭代器（Iterator）。
+它们分别用于存储数据、管理整个链表，以及遍历链表。*/
 typedef struct listNode {
     struct listNode *prev;
     struct listNode *next;
-    void *value;
+    void *value;              // 可以存储各种数据，因为是void指针
 } listNode;
 
 typedef struct listIter {
@@ -53,7 +54,7 @@ typedef struct list {
     unsigned long len;
 } list;
 
-/* Functions implemented as macros */
+/* 以宏实现的函数 */ /* Functions implemented as macros */
 #define listLength(l) ((l)->len)
 #define listFirst(l) ((l)->head)
 #define listLast(l) ((l)->tail)
@@ -69,7 +70,7 @@ typedef struct list {
 #define listGetFreeMethod(l) ((l)->free)
 #define listGetMatchMethod(l) ((l)->match)
 
-/* Prototypes */
+/* 函数原型声明 */ /* Prototypes */
 list *listCreate(void);
 void listRelease(list *list);
 void listEmpty(list *list);
@@ -90,6 +91,7 @@ void listRotateHeadToTail(list *list);
 void listJoin(list *l, list *o);
 
 /* Directions for iterators */
+/* 迭代器的迭代方向 */
 #define AL_START_HEAD 0
 #define AL_START_TAIL 1
 

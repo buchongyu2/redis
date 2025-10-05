@@ -1,4 +1,5 @@
 /* Maxmemory directive handling (LRU eviction and other policies).
+ * Maxmemory 指令处理（LRU 淘汰和其他策略）。
  *
  * ----------------------------------------------------------------------------
  *
@@ -36,7 +37,7 @@
 #include <math.h>
 
 /* ----------------------------------------------------------------------------
- * Data structures
+ * 数据结构 Data structures
  * --------------------------------------------------------------------------*/
 
 /* To improve the quality of the LRU approximation we take a set of keys
@@ -50,24 +51,37 @@
  * inverse frequency means to evict keys with the least frequent accesses).
  *
  * Empty entries have the key pointer set to NULL. */
+
+/* 为了提高 LRU 近似算法的质量，我们在多次调用 performEvictions() 时，
+ * 选取一组适合淘汰的键作为候选。
+ *
+ * 淘汰池中的条目按照空闲时间排序，空闲时间较大的条目放在右侧（升序）。
+ *
+ * 如果使用的是 LFU 策略，则使用反向频率指示代替空闲时间，
+ * 这样我们仍然可以根据较大的值进行淘汰（较大的反向频率表示访问最少的键）。
+ *
+ * 空条目的键指针会被设置为 NULL。
+ */
 #define EVPOOL_SIZE 16
 #define EVPOOL_CACHED_SDS_SIZE 255
 struct evictionPoolEntry {
-    unsigned long long idle;    /* Object idle time (inverse frequency for LFU) */
-    sds key;                    /* Key name. */
-    sds cached;                 /* Cached SDS object for key name. */
-    int dbid;                   /* Key DB number. */
+    unsigned long long idle;   /* 对象的空闲时间（对于 LFU，这是反向频率）。 */ /* Object idle time (inverse frequency for LFU) */
+    sds key;                   /* 键名。 */ /* Key name. */
+    sds cached;                /* 缓存的键名 SDS 对象。 */ /* Cached SDS object for key name. */
+    int dbid;                  /* 键所在的数据库编号。 */ /* Key DB number. */
 };
 
 static struct evictionPoolEntry *EvictionPoolLRU;
 
 /* ----------------------------------------------------------------------------
- * Implementation of eviction, aging and LRU
+ * 淘汰、老化和 LRU 的实现 Implementation of eviction, aging and LRU
  * --------------------------------------------------------------------------*/
 
 /* Return the LRU clock, based on the clock resolution. This is a time
  * in a reduced-bits format that can be used to set and check the
  * object->lru field of redisObject structures. */
+/* 返回 LRU 时钟，基于时钟的分辨率。这是一个简化位数的时间格式，
+ * 可用于设置和检查 redisObject 结构的 object->lru 字段。 */
 unsigned int getLRUClock(void) {
     return (mstime()/LRU_CLOCK_RESOLUTION) & LRU_CLOCK_MAX;
 }
@@ -76,6 +90,10 @@ unsigned int getLRUClock(void) {
  * If the current resolution is lower than the frequency we refresh the
  * LRU clock (as it should be in production servers) we return the
  * precomputed value, otherwise we need to resort to a system call. */
+/* 这个函数用于获取当前的 LRU 时钟。
+ * 如果当前的分辨率低于我们刷新 LRU 时钟的频率
+ * （在生产服务器中通常是这样的），我们返回预先计算的值，
+ * 否则我们需要依赖一次系统调用。 */
 unsigned int LRU_CLOCK(void) {
     unsigned int lruclock;
     if (1000/server.hz <= LRU_CLOCK_RESOLUTION) {
@@ -88,6 +106,8 @@ unsigned int LRU_CLOCK(void) {
 
 /* Given an object returns the min number of milliseconds the object was never
  * requested, using an approximated LRU algorithm. */
+/* 给定一个对象，返回该对象在一段时间内从未被请求的最小毫秒数，
+ * 使用的是一种近似的 LRU 算法。 */
 unsigned long long estimateObjectIdleTime(robj *o) {
     unsigned long long lruclock = LRU_CLOCK();
     if (lruclock >= o->lru) {
@@ -117,8 +137,26 @@ unsigned long long estimateObjectIdleTime(robj *o) {
  * we populate it again. This time we'll be sure that the pool has at least
  * one key that can be evicted, if there is at least one key that can be
  * evicted in the whole database. */
+/* LRU 近似算法
+ *
+ * Redis 使用一种常量内存的 LRU 算法近似实现。
+ * 每当有键需要过期时，会采样 N 个键（N 很小，通常为 5 左右），
+ * 用于填充一个包含 M 个最佳待淘汰键的池（池大小由 EVPOOL_SIZE 定义）。
+ *
+ * 采样到的 N 个键，如果比池中现有的某个键更适合淘汰（访问时间更早），
+ * 就会加入到待淘汰的优质键池中。
+ *
+ * 池填满后，会淘汰池中最适合的键。
+ * 但注意，键被删除后不会从池中移除，因此池中可能包含已不存在的键。
+ *
+ * 当尝试淘汰键时，如果池中的所有条目都不存在，
+ * 就会重新填充池。这样可以确保池中至少有一个可淘汰的键，
+ * 前提是整个数据库中至少有一个可淘汰的键。
+ */
 
 /* Create a new eviction pool. */
+/* 创建一个新的淘汰池。 */
+
 void evictionPoolAlloc(void) {
     struct evictionPoolEntry *ep;
     int j;

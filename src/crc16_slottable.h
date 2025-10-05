@@ -7,6 +7,15 @@
  * The array indexes are slot numbers, so that given a desired slot, this string is guaranteed
  * to make redis cluster route a request to the shard holding this slot 
  */
+/* 一个表，包含了 Redis 的 crc16 映射到任意给定 Redis 集群槽的最短可能字母数字字符串。
+ *
+ * 数组的索引是槽编号，因此给定一个目标槽，这个字符串可以保证让 Redis 集群将请求路由到持有该槽的分片。
+ * 
+ * Redis 集群中的槽（slot）
+ * Redis 集群将整个键空间划分为 16384 个槽（slot），编号从 0 到 16383。
+ * 每个键通过 CRC16 哈希算法 计算出一个哈希值，然后对 16384 取模，得到对应的槽编号。
+ * 每个槽由集群中的一个节点（shard）负责存储。
+ */
 
 const char *crc16_slot_table[] = {
 "06S", "Qi", "5L5", "4Iu", "4gY", "460", "1Y7", "1LV", "0QG", "ru", "7Ok", "4ji", "4DE", "65n", "2JH", "I8", "F9", "SX", "7nF", "4KD", 

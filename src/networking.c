@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * 网络实现部分 Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,9 +37,13 @@
 
 static void setProtocolError(const char *errstr, client *c);
 int postponeClientRead(client *c);
-int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
+/**
+ * 仅在加载 AOF/RDB 极少数场景下使用，这时候不会处理普通命令
+ */
+int ProcessingEventsWhileBlocked = 0; /* 见 processEventsWhileBlocked()。 */ /* See processEventsWhileBlocked(). */
 
-/* Return the size consumed from the allocator, for the specified SDS string,
+/* 返回指定 SDS 字符串在分配器中实际消耗的内存大小，包括内部碎片。
+ * 用于计算客户端输出缓冲区的大小。 */ /* Return the size consumed from the allocator, for the specified SDS string,
  * including internal fragmentation. This function is used in order to compute
  * the client output buffer size. */
 size_t sdsZmallocSize(sds s) {
@@ -49,27 +53,31 @@ size_t sdsZmallocSize(sds s) {
 
 /* Return the amount of memory used by the sds string at object->ptr
  * for a string object. This includes internal fragmentation. */
+/* 返回字符串对象 object->ptr 所占用的内存大小（包括内部碎片）。
+ * 仅适用于字符串对象。 */
 size_t getStringObjectSdsUsedMemory(robj *o) {
     serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
     switch(o->encoding) {
     case OBJ_ENCODING_RAW: return sdsZmallocSize(o->ptr);
     case OBJ_ENCODING_EMBSTR: return zmalloc_size(o)-sizeof(robj);
-    default: return 0; /* Just integer encoding for now. */
+    default: return 0; /* 目前只处理整数编码。 */ /* Just integer encoding for now. */
     }
 }
 
 /* Return the length of a string object.
  * This does NOT includes internal fragmentation or sds unused space. */
+/* 返回字符串对象的实际长度。
+ * 不包括内部碎片或 SDS 未使用空间。 */
 size_t getStringObjectLen(robj *o) {
     serverAssertWithInfo(NULL,o,o->type == OBJ_STRING);
     switch(o->encoding) {
     case OBJ_ENCODING_RAW: return sdslen(o->ptr);
     case OBJ_ENCODING_EMBSTR: return sdslen(o->ptr);
-    default: return 0; /* Just integer encoding for now. */
+    default: return 0; /* 目前只处理整数编码。 */ /* Just integer encoding for now. */
     }
 }
 
-/* Client.reply list dup and free methods. */
+/* Client.reply 列表的复制和释放方法。 */ /* Client.reply list dup and free methods. */
 void *dupClientReplyValue(void *o) {
     clientReplyBlock *old = o;
     clientReplyBlock *buf = zmalloc(sizeof(clientReplyBlock) + old->size);
@@ -87,35 +95,49 @@ int listMatchObjects(void *a, void *b) {
 
 /* This function links the client to the global linked list of clients.
  * unlinkClient() does the opposite, among other things. */
+/* 这个函数将客户端链接到全局客户端链表中。
+ * unlinkClient() 则执行相反的操作（以及其他操作）。 */
 void linkClient(client *c) {
     listAddNodeTail(server.clients,c);
     /* Note that we remember the linked list node where the client is stored,
      * this way removing the client in unlinkClient() will not require
      * a linear scan, but just a constant time operation. */
+    /* 注意我们会记录客户端在链表中的节点位置，
+     * 这样在 unlinkClient() 时移除客户端就不需要线性扫描，
+     * 而是可以常数时间完成。 */
     c->client_list_node = listLast(server.clients);
     uint64_t id = htonu64(c->id);
     raxInsert(server.clients_index,(unsigned char*)&id,sizeof(id),c,NULL);
 }
 
-/* Initialize client authentication state.
+/* 
+ * 初始化客户端认证状态。 
+ * Initialize client authentication state.
  */
 static void clientSetDefaultAuth(client *c) {
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
+    /* 如果默认用户不需要认证，则直接认证通过。 */
     c->user = DefaultUser;
     c->authenticated = (c->user->flags & USER_FLAG_NOPASS) &&
                        !(c->user->flags & USER_FLAG_DISABLED);
 }
 
+/* 判断是否需要认证。 */
 int authRequired(client *c) {
     /* Check if the user is authenticated. This check is skipped in case
      * the default user is flagged as "nopass" and is active. */
+    /* 检查用户是否已认证。如果默认用户设置了 "nopass" 且处于激活状态，则跳过认证检查。 */
     int auth_required = (!(DefaultUser->flags & USER_FLAG_NOPASS) ||
                           (DefaultUser->flags & USER_FLAG_DISABLED)) &&
                         !c->authenticated;
     return auth_required;
 }
 
+/**
+ * 给 conn 设置事件处理函数，并将 conn 关联到客户端结构体 c。
+ * readQueryFromClient
+ */
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -123,12 +145,26 @@ client *createClient(connection *conn) {
      * This is useful since all the commands needs to be executed
      * in the context of a client. When commands are executed in other
      * contexts (for instance a Lua script) we need a non connected client. */
+    /* LUA 脚本执行的伪客户端 */
+    /* 传递 NULL 作为 conn，可以创建一个未连接的客户端。
+     * 这样做很有用，因为所有命令都需要在客户端上下文中执行。
+     * 当命令在其他上下文（例如 Lua 脚本）中执行时，我们需要一个未连接的客户端。 */
     if (conn) {
         connNonBlock(conn);
         connEnableTcpNoDelay(conn);
         if (server.tcpkeepalive)
             connKeepAlive(conn,server.tcpkeepalive);
-        connSetReadHandler(conn, readQueryFromClient);
+        /**
+         * 为新连接 conn 注册一个读事件处理器，即 readQueryFromClient。读取数据和处理数据都在这里哦。
+         * 当该连接的 socket 变为可读（有数据到来时），事件循环会自动调用 readQueryFromClient。
+         * readQueryFromClient 负责从客户端读取命令数据，并进行解析和后续处理。
+         */
+        /**
+         * 设置连接的读处理函数为 readQueryFromClient。在有数据可读
+         * 设置 conn->read_handler 为 readQueryFromClient。
+         * 便于在主事件循环中，通过 rfileProc 进行调用。
+         */
+        connSetReadHandler(conn, readQueryFromClient);  
         connSetPrivateData(conn, c);
     }
 
@@ -1051,6 +1087,7 @@ void deferredAfterErrorReply(client *c, list *errors) {
 
 /* Return true if the specified client has pending reply buffers to write to
  * the socket. */
+/* 如果指定的客户端有待写入 socket 的回复缓冲区，则返回 true。 */
 int clientHasPendingReplies(client *c) {
     return c->bufpos || listLength(c->reply);
 }
@@ -1116,6 +1153,12 @@ void clientAcceptHandler(connection *conn) {
 }
 
 #define MAX_ACCEPTS_PER_CALL 1000
+/**
+ * 检查连接状态，拒绝异常连接。
+ * 判断连接数是否超过最大限制，超限则拒绝。
+ * 创建客户端对象，初始化连接。
+ * 注册读事件处理器（通常是 readHandler），让事件循环在该 fd 可读时调用 readHandler。
+ */
 static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     client *c;
     char conninfo[100];
@@ -1135,7 +1178,12 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
      * Admission control will happen before a client is created and connAccept()
      * called, because we don't want to even start transport-level negotiation
      * if rejected. */
-    if (listLength(server.clients) + getClusterConnectionsCount()
+    /* 限制同时接收的连接数量。
+     *
+     * 在创建客户端对象和调用 connAccept() 之前会进行准入控制，
+     * 因为如果连接被拒绝，我们甚至不希望开始传输层协商。
+     */
+    if (listLength(server.clients) + getClusterConnectionsCount() // /* 返回用于集群模式下总线连接的大致 socket 数量。 */
         >= server.maxclients)
     {
         char *err;
@@ -1148,8 +1196,11 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
         /* That's a best effort error message, don't check write errors.
          * Note that for TLS connections, no handshake was done yet so nothing
          * is written and the connection will just drop. */
+        /* 这是尽力而为的错误提示，不检查写入错误。
+         * 注意，对于 TLS 连接，此时还未进行握手，所以不会写入任何内容，连接会直接断开。 */
         if (connWrite(conn,err,strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
+            /* 无需处理，仅为避免警告... */
         }
         server.stat_rejected_conn++;
         connClose(conn);
@@ -1157,6 +1208,11 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     }
 
     /* Create connection and client */
+    /**
+     * 关键调用:
+     * 创建连接和 client。设置：readQueryFromClient
+     * createClient -> initClient -> connSetReadHandler -> readQueryFromClient
+     */
     if ((c = createClient(conn)) == NULL) {
         serverLog(LL_WARNING,
             "Error registering fd event for the new client: %s (conn: %s)",
@@ -1166,7 +1222,7 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
         return;
     }
 
-    /* Last chance to keep flags */
+    /* 最后一次机会保留标志位 */ /* Last chance to keep flags */
     c->flags |= flags;
 
     /* Initiate accept.
@@ -1176,6 +1232,14 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
      * 2. Schedule a future call to clientAcceptHandler().
      *
      * Because of that, we must do nothing else afterwards.
+     */
+     /* 开始执行 accept 操作。
+     *
+     * 注意，connAccept() 在这里可以做两件事：
+     * 1. 立即调用 clientAcceptHandler()；
+     * 2. 安排将来某个时刻调用 clientAcceptHandler()。
+     *
+     * 因此，后面不能再做其他操作。
      */
     if (connAccept(conn, clientAcceptHandler) == C_ERR) {
         char conninfo[100];
@@ -1188,6 +1252,11 @@ static void acceptCommonHandler(connection *conn, int flags, char *ip) {
     }
 }
 
+/**
+ * 负责监听 socket 上的新连接请求。每次有新连接到来时，循环调用 anetTcpAccept 接收连接
+ * connection.fd 表示底层 socket 文件描述符。
+ * createSocketAcceptHandler -> acceptTcpHandler -> acceptCommonHandler -> createClient -> connSetReadHandler -> readQueryFromClient
+ */
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd, max = MAX_ACCEPTS_PER_CALL;
     char cip[NET_IP_STR_LEN];
@@ -1196,7 +1265,8 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(privdata);
 
     while(max--) {
-        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
+        // 接收新的连接
+        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport); // 返回文件描述符
         if (cfd == ANET_ERR) {
             if (anetAcceptFailureNeedsRetry(errno))
                 continue;
@@ -1207,7 +1277,8 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
         anetCloexec(cfd);
         serverLog(LL_VERBOSE,"Accepted %s:%d", cip, cport);
-        acceptCommonHandler(connCreateAcceptedSocket(cfd),0,cip);
+        // 创建各种数据结构，注册CT_Socket事件处理器
+        acceptCommonHandler(connCreateAcceptedSocket(cfd),0,cip); 
     }
 }
 
@@ -1328,6 +1399,8 @@ void unlinkClient(client *c) {
             c->client_list_node = NULL;
         }
 
+        /* 检查该副本是否正在等待无盘复制（rdb 管道），
+         * 如果是，则需要将其从该列表中清除 */
         /* Check if this is a replica waiting for diskless replication (rdb pipe),
          * in which case it needs to be cleaned from that list */
         if (c->flags & CLIENT_SLAVE &&
@@ -1637,6 +1710,14 @@ int writeToClient(client *c, int handler_installed) {
          * Moreover, we also send as much as possible if the client is
          * a slave or a monitor (otherwise, on high-speed traffic, the
          * replication/output buffer will grow indefinitely) */
+        /* 注意我们避免在单次事件中发送超过 NET_MAX_WRITES_PER_EVENT 字节的数据，
+         * 在单线程服务器中，即使有非常大的请求来自超级快速的连接（总是能接收数据），
+         * 也应该服务其他客户端（实际场景比如对环回接口执行 'KEYS *'）。
+         *
+         * 但是如果超过了最大内存限制，则忽略该限制，尽可能多地发送数据。
+         *
+         * 此外，如果客户端是副本或监控，则也会尽可能多地发送数据
+         * （否则在高速流量下，复制/输出缓冲区会无限增长） */
         if (totwritten > NET_MAX_WRITES_PER_EVENT &&
             (server.maxmemory == 0 ||
              zmalloc_used_memory() < server.maxmemory) &&
@@ -2070,6 +2151,11 @@ int processMultibulkBuffer(client *c) {
  * 1. The client is reset unless there are reasons to avoid doing it.
  * 2. In the case of master clients, the replication offset is updated.
  * 3. Propagate commands we got from our master to replicas down the line. */
+/* 执行命令后需要完成的任务：
+ *
+ * 1. 除非有特殊原因，否则会重置客户端。
+ * 2. 如果是主节点客户端，则更新复制偏移量。
+ * 3. 将从主节点收到的命令传播给下游的副本。 */
 void commandProcessed(client *c) {
     /* If client is blocked(including paused), just return avoid reset and replicate.
      *
@@ -2078,17 +2164,24 @@ void commandProcessed(client *c) {
      *    The client will be reset in unblockClient().
      * 2. Don't update replication offset or propagate commands to replicas,
      *    since we have not applied the command. */
+    /* 如果客户端被阻塞（包括暂停），则直接返回，避免重置和复制。
+     *
+     * 1. 对于被阻塞的客户端，不要重置其结构体，这样回复回调仍能访问 argv 和 argc 字段。
+     *    客户端会在 unblockClient() 中被重置。
+     * 2. 不要更新复制偏移量或向副本传播命令，因为命令尚未被应用。 */
     if (c->flags & CLIENT_BLOCKED) return;
 
     resetClient(c);
 
     long long prev_offset = c->reploff;
     if (c->flags & CLIENT_MASTER && !(c->flags & CLIENT_MULTI)) {
-        /* Update the applied replication offset of our master. */
+        /* 更新主节点已应用的复制偏移量。 */ /* Update the applied replication offset of our master. */
         c->reploff = c->read_reploff - sdslen(c->querybuf) + c->qb_pos;
     }
 
-    /* If the client is a master we need to compute the difference
+    /* 如果客户端是主节点，需要计算处理缓冲区前后应用的偏移量差值，
+     * 以了解实际应用了多少复制流：这个数量及其对应的复制流部分，
+     * 会被传播到下游副本和复制积压缓冲区。 */ /* If the client is a master we need to compute the difference
      * between the applied offset before and after processing the buffer,
      * to understand how much of the replication stream was actually
      * applied to the master state: this quantity, and its corresponding
@@ -2112,11 +2205,20 @@ void commandProcessed(client *c) {
  *
  * The function returns C_ERR in case the client was freed as a side effect
  * of processing the command, otherwise C_OK is returned. */
+/* TODO：最终执行命令的
+ * 该函数会调用 processCommand()，但同时为客户端执行一些有用的子任务：
+ *
+ * 1. 设置当前客户端为参数 'c'。
+ * 2. 如果命令被处理，则调用 commandProcessed()。
+ *
+ * 如果在处理命令的过程中客户端被释放，则返回 C_ERR，否则返回 C_OK。
+ */
 int processCommandAndResetClient(client *c) {
     int deadclient = 0;
     client *old_client = server.current_client;
     server.current_client = c;
-    if (processCommand(c) == C_OK) {
+    if (processCommand(c) == C_OK) { // 负责解析和执行客户端命令，是命令处理的主入口。它会检查命令合法性、权限、环境等，最终调用命令实现。
+        // 在命令执行后调用，负责做一些收尾工作，比如重置客户端状态、更新主节点复制偏移量、将主节点收到的命令传播给下游副本等。
         commandProcessed(c);
     }
     if (server.current_client == NULL) deadclient = 1;
@@ -2152,13 +2254,17 @@ int processPendingCommandsAndResetClient(client *c) {
  * more query buffer to process, because we read more data from the socket
  * or because a client was blocked and later reactivated, so there could be
  * pending query buffer, already representing a full command, to process. */
+/* 每当客户端结构体 'c' 中有更多的查询缓冲区需要处理时，都会调用此函数，
+ * 可能是因为从 socket 读取了更多数据，
+ * 或者因为客户端被阻塞后又被激活，此时可能有待处理的查询缓冲区，
+ * 这些缓冲区可能已经包含了完整的命令需要处理。 */
 void processInputBuffer(client *c) {
-    /* Keep processing while there is something in the input buffer */
+    /* 当输入缓冲区还有内容时，持续处理 */ /* Keep processing while there is something in the input buffer */
     while(c->qb_pos < sdslen(c->querybuf)) {
-        /* Immediately abort if the client is in the middle of something. */
+         /* 如果客户端正在处理中，立即中止。 */ /* Immediately abort if the client is in the middle of something. */
         if (c->flags & CLIENT_BLOCKED) break;
 
-        /* Don't process more buffers from clients that have already pending
+        /* 如果客户端已经有待执行的命令（在 c->argv 中），则不再处理更多缓冲区。 */ /* Don't process more buffers from clients that have already pending
          * commands to execute in c->argv. */
         if (c->flags & CLIENT_PENDING_COMMAND) break;
 
@@ -2166,6 +2272,8 @@ void processInputBuffer(client *c) {
          * condition on the slave. We want just to accumulate the replication
          * stream (instead of replying -BUSY like we do with other clients) and
          * later resume the processing. */
+        /* 如果从主节点读取输入时，当前从节点有繁忙脚本在运行，则不处理主节点输入。
+         * 这样只会累积复制流，稍后再恢复处理（不像其他客户端那样回复 -BUSY）。 */
         if (server.lua_timedout && c->flags & CLIENT_MASTER) break;
 
         /* CLIENT_CLOSE_AFTER_REPLY closes the connection once the reply is
@@ -2173,9 +2281,14 @@ void processInputBuffer(client *c) {
          * this flag has been set (i.e. don't process more commands).
          *
          * The same applies for clients we want to terminate ASAP. */
+        /* CLIENT_CLOSE_AFTER_REPLY 标志表示在回复写完后关闭连接。
+         * 设置该标志后，不能让回复继续增长（即不再处理更多命令）。
+         *
+         * 对于需要尽快终止的客户端也同理。 */
         if (c->flags & (CLIENT_CLOSE_AFTER_REPLY|CLIENT_CLOSE_ASAP)) break;
 
         /* Determine request type when unknown. */
+        /* 当请求类型未知时，进行判断。 */
         if (!c->reqtype) {
             if (c->querybuf[c->qb_pos] == '*') {
                 c->reqtype = PROTO_REQ_MULTIBULK;
@@ -2189,6 +2302,8 @@ void processInputBuffer(client *c) {
             /* If the Gopher mode and we got zero or one argument, process
              * the request in Gopher mode. To avoid data race, Redis won't
              * support Gopher if enable io threads to read queries. */
+            /* 如果启用了 Gopher 模式，并且参数为零或一个，则以 Gopher 模式处理请求。
+            * 为避免数据竞争，Redis 在启用 IO 线程读取查询时不支持 Gopher。 */
             if (server.gopher_enabled && !server.io_threads_do_reads &&
                 ((c->argc == 1 && ((char*)(c->argv[0]->ptr))[0] == '/') ||
                   c->argc == 0))
@@ -2204,21 +2319,22 @@ void processInputBuffer(client *c) {
             serverPanic("Unknown request type");
         }
 
-        /* Multibulk processing could see a <= 0 length. */
+        /* 多批量处理可能会得到长度 <= 0。 */ /* Multibulk processing could see a <= 0 length. */
         if (c->argc == 0) {
             resetClient(c);
         } else {
-            /* If we are in the context of an I/O thread, we can't really
+            /* TODO：如果当前处于 IO 线程上下文，不能在这里执行命令。
+             * 只能标记客户端需要处理命令。 */ /* If we are in the context of an I/O thread, we can't really
              * execute the command here. All we can do is to flag the client
              * as one that needs to process the command. */
             if (c->flags & CLIENT_PENDING_READ) {
-                c->flags |= CLIENT_PENDING_COMMAND;
+                c->flags |= CLIENT_PENDING_COMMAND; // 待执行命令
                 break;
             }
 
-            /* We are finally ready to execute the command. */
+             /* 最终准备好执行命令。 */ /* We are finally ready to execute the command. */
             if (processCommandAndResetClient(c) == C_ERR) {
-                /* If the client is no longer valid, we avoid exiting this
+                /* 如果客户端已失效，则避免后续处理和缓冲区裁剪，直接返回。 */ /* If the client is no longer valid, we avoid exiting this
                  * loop and trimming the client buffer later. So we return
                  * ASAP in that case. */
                 return;
@@ -2226,13 +2342,16 @@ void processInputBuffer(client *c) {
         }
     }
 
-    /* Trim to pos */
+    /* 裁剪缓冲区到当前位置 */ /* Trim to pos */
     if (c->qb_pos) {
         sdsrange(c->querybuf,c->qb_pos,-1);
         c->qb_pos = 0;
     }
 }
 
+/**
+ * 读取解析客户端发送的命令
+ */
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
     int nread, readlen;
@@ -2240,9 +2359,15 @@ void readQueryFromClient(connection *conn) {
 
     /* Check if we want to read from the client later when exiting from
      * the event loop. This is the case if threaded I/O is enabled. */
+    /* 检查是否需要在事件循环退出时再读取客户端数据。
+     *  如果启用了线程化 I/O，如果不满足条件的 client，则退出 */
+    /**
+     * 调用此函数后，会将客户端加入待处理读队列：server.clients_pending_read 中
+     * 所以在设置了server.io_threads_num> 1 ，并且当io_threads_active激活后，走线程化 IO
+     */
     if (postponeClientRead(c)) return;
 
-    /* Update total number of reads on server */
+    /* 更新服务器处理的总读取次数 */ /* Update total number of reads on server */
     atomicIncr(server.stat_total_reads_processed, 1);
 
     readlen = PROTO_IOBUF_LEN;
@@ -2252,6 +2377,10 @@ void readQueryFromClient(connection *conn) {
      * at the risk of requiring more read(2) calls. This way the function
      * processMultiBulkBuffer() can avoid copying buffers to create the
      * Redis Object representing the argument. */
+    /* 如果这是一个 multi bulk 请求，并且我们正在处理一个足够大的 bulk 回复，
+     * 尽量让查询缓冲区正好包含表示对象的 SDS 字符串，
+     * 即使这可能需要多次 read(2) 调用。
+     * 这样 processMultiBulkBuffer() 就可以避免复制缓冲区来创建参数对象。 */
     if (c->reqtype == PROTO_REQ_MULTIBULK && c->multibulklen && c->bulklen != -1
         && c->bulklen >= PROTO_MBULK_BIG_ARG)
     {
@@ -2259,6 +2388,8 @@ void readQueryFromClient(connection *conn) {
 
         /* Note that the 'remaining' variable may be zero in some edge case,
          * for example once we resume a blocked client after CLIENT PAUSE. */
+        /* 注意，在某些边界情况下，'remaining' 变量可能为零，
+         * 例如在 CLIENT PAUSE 后恢复被阻塞的客户端时。 */
         if (remaining > 0 && remaining < readlen) readlen = remaining;
     }
 
@@ -2282,6 +2413,8 @@ void readQueryFromClient(connection *conn) {
         /* Append the query buffer to the pending (not applied) buffer
          * of the master. We'll use this buffer later in order to have a
          * copy of the string applied by the last command executed. */
+        /* 将查询缓冲区追加到主节点的待处理（未应用）缓冲区。
+         * 稍后会用这个缓冲区保存最后执行命令时应用的字符串副本。 */
         c->pending_querybuf = sdscatlen(c->pending_querybuf,
                                         c->querybuf+qblen,nread);
     }
@@ -2301,7 +2434,8 @@ void readQueryFromClient(connection *conn) {
         return;
     }
 
-    /* There is more data in the client input buffer, continue parsing it
+    /* 客户端输入缓冲区还有更多数据，继续解析，
+     * 以检查是否有完整命令可以执行。 *//* There is more data in the client input buffer, continue parsing it
      * in case to check if there is a full command to execute. */
      processInputBuffer(c);
 }
@@ -3442,7 +3576,7 @@ void pauseClients(mstime_t end, pause_type type) {
     }
 }
 
-/* Unpause clients and queue them for reprocessing. */
+/* 解除客户端暂停，并将它们加入重新处理队列。 */ /* Unpause clients and queue them for reprocessing. */
 void unpauseClients(void) {
     listNode *ln;
     listIter li;
@@ -3451,7 +3585,7 @@ void unpauseClients(void) {
     server.client_pause_type = CLIENT_PAUSE_OFF;
     server.client_pause_end_time = 0;
 
-    /* Unblock all of the clients so they are reprocessed. */
+    /* 解除所有客户端的阻塞，使它们可以被重新处理。 */ /* Unblock all of the clients so they are reprocessed. */
     listRewind(server.paused_clients,&li);
     while ((ln = listNext(&li)) != NULL) {
         c = listNodeValue(ln);
@@ -3459,12 +3593,13 @@ void unpauseClients(void) {
     }
 }
 
-/* Returns true if clients are paused and false otherwise. */ 
+/* 如果客户端处于暂停状态则返回 true，否则返回 false。 */ /* Returns true if clients are paused and false otherwise. */ 
 int areClientsPaused(void) {
     return server.client_pause_type != CLIENT_PAUSE_OFF;
 }
 
-/* Checks if the current client pause has elapsed and unpause clients
+/* 检查当前客户端暂停是否已过期，如果已过期则解除暂停。
+ * 同时如果客户端现在仍处于暂停状态则返回 true，否则返回 false。 */ /* Checks if the current client pause has elapsed and unpause clients
  * if it has. Also returns true if clients are now paused and false 
  * otherwise. */
 int checkClientPauseTimeoutAndReturnIfPaused(void) {
@@ -3488,17 +3623,36 @@ int checkClientPauseTimeoutAndReturnIfPaused(void) {
  * write, close sequence needed to serve a client.
  *
  * The function returns the total number of events processed. */
+/* 该函数由 Redis 调用，用于在执行某些不可中断操作时，定期处理一些事件。
+ * 这样可以在启动时加载数据集或与主节点全量重同步期间，及时回复客户端 -LOADING 错误。
+ *
+ * 它会调用事件循环来处理一些事件。具体来说，只要收到有事件被处理的确认，
+ * 就会尝试调用事件循环 4 次，以便完成服务客户端所需的 accept、read、write、close 等流程。
+ *
+ * 该函数返回处理的事件总数。 */
+
+/* 更新缓存时间，因为它用于创建和更新与客户端的最后交互时间以及其他重要用途。 */
+
+/* 注意：当我们在阻塞期间处理事件（例如在执行繁忙的 Lua 脚本时），会设置一个全局标志。
+ * 当该标志被设置时，会避免用线程化 I/O 处理客户端的读操作。
+ * 详情见：https://github.com/redis/redis/issues/6988 */
+ 
+/* 注意 server.events_processed_while_blocked 也会被事件循环处理器的回调函数递增。 */
 void processEventsWhileBlocked(void) {
     int iterations = 4; /* See the function top-comment. */
 
     /* Update our cached time since it is used to create and update the last
      * interaction time with clients and for other important things. */
+    /* 更新缓存时间，因为它用于创建和更新与客户端的最后交互时间以及其他重要用途。 */
     updateCachedTime(0);
 
     /* Note: when we are processing events while blocked (for instance during
      * busy Lua scripts), we set a global flag. When such flag is set, we
      * avoid handling the read part of clients using threaded I/O.
      * See https://github.com/redis/redis/issues/6988 for more info. */
+    /* 注意：当我们在阻塞期间处理事件（例如在执行繁忙的 Lua 脚本时），会设置一个全局标志。
+     * 当该标志被设置时，会避免用线程化 I/O 处理客户端的读操作。
+     * 详情见：https://github.com/redis/redis/issues/6988 */
     ProcessingEventsWhileBlocked = 1;
     while (iterations--) {
         long long startval = server.events_processed_while_blocked;
@@ -3507,6 +3661,7 @@ void processEventsWhileBlocked(void) {
             AE_CALL_BEFORE_SLEEP|AE_CALL_AFTER_SLEEP);
         /* Note that server.events_processed_while_blocked will also get
          * incremeted by callbacks called by the event loop handlers. */
+        /* 注意 server.events_processed_while_blocked 也会被事件循环处理器的回调函数递增。 */
         server.events_processed_while_blocked += ae_events;
         long long events = server.events_processed_while_blocked - startval;
         if (!events) break;
@@ -3518,7 +3673,7 @@ void processEventsWhileBlocked(void) {
 }
 
 /* ==========================================================================
- * Threaded I/O
+ * 线程化 I/O Threaded I/O
  * ========================================================================== */
 
 #define IO_THREADS_MAX_NUM 128
@@ -3533,19 +3688,28 @@ int io_threads_op;      /* IO_THREADS_OP_WRITE or IO_THREADS_OP_READ. */
 /* This is the list of clients each thread will serve when threaded I/O is
  * used. We spawn io_threads_num-1 threads, since one is the main thread
  * itself. */
+/* ID 是线程编号（从 0 到 server.iothreads_num-1），线程只会操作自己对应的客户端子数组。 */
 list *io_threads_list[IO_THREADS_MAX_NUM];
 
+/**
+ * 获取指定 IO 线程的待处理任务数量，使用原子操作获取。
+ */
 static inline unsigned long getIOPendingCount(int i) {
     unsigned long count = 0;
     atomicGetWithSync(io_threads_pending[i], count);
     return count;
 }
 
+// 设置指定 IO 线程的待处理任务数量，使用原子操作设置。
 static inline void setIOPendingCount(int i, unsigned long count) {
     atomicSetWithSync(io_threads_pending[i], count);
 }
 
+/**
+ * 每个 IO 线程都从这里执行，每个线程的入口位置
+ */
 void *IOThreadMain(void *myid) {
+    /* ID 是线程编号（从 0 到 server.iothreads_num-1），线程只会操作自己对应的客户端子数组。 */
     /* The ID is the thread number (from 0 to server.iothreads_num-1), and is
      * used by the thread to just manipulate a single sub-array of clients. */
     long id = (unsigned long)myid;
@@ -3557,12 +3721,12 @@ void *IOThreadMain(void *myid) {
     makeThreadKillable();
 
     while(1) {
-        /* Wait for start */
+        /* 等待启动 */ /* Wait for start */
         for (int j = 0; j < 1000000; j++) {
             if (getIOPendingCount(id) != 0) break;
         }
 
-        /* Give the main thread a chance to stop this thread. */
+        /* 给主线程一个机会来停止该线程。 */ /* Give the main thread a chance to stop this thread. */
         if (getIOPendingCount(id) == 0) {
             pthread_mutex_lock(&io_threads_mutex[id]);
             pthread_mutex_unlock(&io_threads_mutex[id]);
@@ -3571,7 +3735,7 @@ void *IOThreadMain(void *myid) {
 
         serverAssert(getIOPendingCount(id) != 0);
 
-        /* Process: note that the main thread will never touch our list
+        /* 处理：注意主线程在我们将待处理计数降为 0 之前不会操作我们的列表。 */ /* Process: note that the main thread will never touch our list
          * before we drop the pending count to 0. */
         listIter li;
         listNode *ln;
@@ -3591,12 +3755,13 @@ void *IOThreadMain(void *myid) {
     }
 }
 
-/* Initialize the data structures needed for threaded I/O. */
+/* 初始化线程化 I/O 所需的数据结构。 */ /* Initialize the data structures needed for threaded I/O. */
 void initThreadedIO(void) {
     server.io_threads_active = 0; /* We start with threads not active. */
 
     /* Don't spawn any thread if the user selected a single thread:
      * we'll handle I/O directly from the main thread. */
+    /* 如果用户只选择了单线程，则不创建任何线程，直接由主线程处理 I/O。 */
     if (server.io_threads_num == 1) return;
 
     if (server.io_threads_num > IO_THREADS_MAX_NUM) {
@@ -3605,17 +3770,17 @@ void initThreadedIO(void) {
         exit(1);
     }
 
-    /* Spawn and initialize the I/O threads. */
+    /* 创建并初始化 I/O 线程。 */ /* Spawn and initialize the I/O threads. */
     for (int i = 0; i < server.io_threads_num; i++) {
-        /* Things we do for all the threads including the main thread. */
+         /* 所有线程（包括主线程）都需要做的事情。 */ /* Things we do for all the threads including the main thread. */
         io_threads_list[i] = listCreate();
-        if (i == 0) continue; /* Thread 0 is the main thread. */
+        if (i == 0) continue;  /* 线程 0 是主线程。 */ /* Thread 0 is the main thread. */
 
-        /* Things we do only for the additional threads. */
+        /* 只为额外的线程做的事情。 */ /* Things we do only for the additional threads. */
         pthread_t tid;
         pthread_mutex_init(&io_threads_mutex[i],NULL);
         setIOPendingCount(i, 0);
-        pthread_mutex_lock(&io_threads_mutex[i]); /* Thread will be stopped. */
+        pthread_mutex_lock(&io_threads_mutex[i]); /* 线程将被停止。 */ /* Thread will be stopped. */
         if (pthread_create(&tid,NULL,IOThreadMain,(void*)(long)i) != 0) {
             serverLog(LL_WARNING,"Fatal: Can't initialize IO thread.");
             exit(1);
@@ -3649,7 +3814,7 @@ void startThreadedIO(void) {
 }
 
 void stopThreadedIO(void) {
-    /* We may have still clients with pending reads when this function
+     /* 当调用此函数时，可能还有待处理读操作的客户端：在停止线程前先处理它们。 */ /* We may have still clients with pending reads when this function
      * is called: handle them before stopping the threads. */
     handleClientsWithPendingReadsUsingThreads();
     serverAssert(server.io_threads_active == 1);
@@ -3667,10 +3832,18 @@ void stopThreadedIO(void) {
  * The function returns 0 if the I/O threading should be used because there
  * are enough active threads, otherwise 1 is returned and the I/O threads
  * could be possibly stopped (if already active) as a side effect. */
+/* 该函数检查是否有足够的待处理客户端需要激活 I/O 线程：
+ * 如果没有，则停止 I/O 线程（如果已激活）。
+ * 我们通过待处理写操作的数量来衡量需要并行处理的客户端数量，
+ * 如果待处理客户端太少，则全局禁用读操作的线程化 I/O。
+ *
+ * 如果应该使用线程化 I/O（有足够的活跃线程），则返回 0；
+ * 否则返回 1，并可能作为副作用停止 I/O 线程（如果已激活）。
+ */
 int stopThreadedIOIfNeeded(void) {
     int pending = listLength(server.clients_pending_write);
 
-    /* Return ASAP if IO threads are disabled (single threaded mode). */
+    /* 如果 IO 线程被禁用（单线程模式），则立即返回。 */ /* Return ASAP if IO threads are disabled (single threaded mode). */
     if (server.io_threads_num == 1) return 1;
 
     if (pending < (server.io_threads_num*2)) {
@@ -3683,18 +3856,19 @@ int stopThreadedIOIfNeeded(void) {
 
 int handleClientsWithPendingWritesUsingThreads(void) {
     int processed = listLength(server.clients_pending_write);
-    if (processed == 0) return 0; /* Return ASAP if there are no clients. */
+    if (processed == 0) return 0; /* 如果没有客户端，立即返回。 */ /* Return ASAP if there are no clients. */
 
+    /* 如果 I/O 线程被禁用或待处理客户端较少，则不使用 I/O 线程，直接用同步代码处理。 */
     /* If I/O threads are disabled or we have few clients to serve, don't
      * use I/O threads, but the boring synchronous code. */
     if (server.io_threads_num == 1 || stopThreadedIOIfNeeded()) {
         return handleClientsWithPendingWrites();
     }
 
-    /* Start threads if needed. */
+    /* 如有需要，启动线程。 *//* Start threads if needed. */
     if (!server.io_threads_active) startThreadedIO();
 
-    /* Distribute the clients across N different lists. */
+    /* 将客户端分配到 N 个不同的列表中。 */ /* Distribute the clients across N different lists. */
     listIter li;
     listNode *ln;
     listRewind(server.clients_pending_write,&li);
@@ -3703,7 +3877,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
         client *c = listNodeValue(ln);
         c->flags &= ~CLIENT_PENDING_WRITE;
 
-        /* Remove clients from the list of pending writes since
+        /* 从待处理写队列中移除即将关闭的客户端。 */ /* Remove clients from the list of pending writes since
          * they are going to be closed ASAP. */
         if (c->flags & CLIENT_CLOSE_ASAP) {
             listDelNode(server.clients_pending_write, ln);
@@ -3715,7 +3889,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
         item_id++;
     }
 
-    /* Give the start condition to the waiting threads, by setting the
+    /* 通过设置原子变量，向等待的线程发出启动信号。 */ /* Give the start condition to the waiting threads, by setting the
      * start condition atomic var. */
     io_threads_op = IO_THREADS_OP_WRITE;
     for (int j = 1; j < server.io_threads_num; j++) {
@@ -3723,7 +3897,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
         setIOPendingCount(j, count);
     }
 
-    /* Also use the main thread to process a slice of clients. */
+    /* 主线程也会处理一部分客户端。 *//* Also use the main thread to process a slice of clients. */
     listRewind(io_threads_list[0],&li);
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
@@ -3731,7 +3905,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
     }
     listEmpty(io_threads_list[0]);
 
-    /* Wait for all the other threads to end their work. */
+    /* 等待所有其他线程完成工作。 */ /* Wait for all the other threads to end their work. */
     while(1) {
         unsigned long pending = 0;
         for (int j = 1; j < server.io_threads_num; j++)
@@ -3739,13 +3913,13 @@ int handleClientsWithPendingWritesUsingThreads(void) {
         if (pending == 0) break;
     }
 
-    /* Run the list of clients again to install the write handler where
+    /* 再次遍历客户端列表，在需要的地方安装写处理器。 */ /* Run the list of clients again to install the write handler where
      * needed. */
     listRewind(server.clients_pending_write,&li);
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
 
-        /* Install the write handler if there are pending writes in some
+        /* 如果有待写回复但安装写处理器失败，则异步释放客户端。 */ /* Install the write handler if there are pending writes in some
          * of the clients. */
         if (clientHasPendingReplies(c) &&
                 connSetWriteHandler(c->conn, sendReplyToClient) == AE_ERR)
@@ -3755,7 +3929,7 @@ int handleClientsWithPendingWritesUsingThreads(void) {
     }
     listEmpty(server.clients_pending_write);
 
-    /* Update processed count on server */
+    /* 更新服务器已处理的写操作计数 */ /* Update processed count on server */
     server.stat_io_writes_processed += processed;
 
     return processed;
@@ -3765,13 +3939,29 @@ int handleClientsWithPendingWritesUsingThreads(void) {
  * This is called by the readable handler of the event loop.
  * As a side effect of calling this function the client is put in the
  * pending read clients and flagged as such. */
+/* 如果希望稍后通过线程 I/O 处理客户端读操作，则返回 1。
+ * 该函数由事件循环的可读事件处理器调用。
+ * 调用此函数后，会将客户端加入待处理读队列，并设置相应标志。 */
 int postponeClientRead(client *c) {
+    /**
+     * server.io_threads_active
+     * IO 线程已启动（线程池正在运行）。
+
+     * server.io_threads_do_reads
+     * 配置允许读操作使用 IO 线程（不是只线程化写）。
+
+     * !ProcessingEventsWhileBlocked
+     * 当前没有处于阻塞事件处理（比如 Lua 脚本阻塞时，避免线程化读）。
+
+     *!(c->flags & (CLIENT_MASTER|CLIENT_SLAVE|CLIENT_PENDING_READ|CLIENT_BLOCKED))
+     *当前 client 不是主节点、不是从节点、没有被标记为“正在等待读线程处理”、没有被阻塞。
+     */
     if (server.io_threads_active &&
         server.io_threads_do_reads &&
         !ProcessingEventsWhileBlocked &&
         !(c->flags & (CLIENT_MASTER|CLIENT_SLAVE|CLIENT_PENDING_READ|CLIENT_BLOCKED))) 
     {
-        c->flags |= CLIENT_PENDING_READ;
+        c->flags |= CLIENT_PENDING_READ; // 判断 CLIENT_PENDING_READ 是为了防止 client 被重复分发到 IO 线程，保证线程安全和数据一致性。
         listAddNodeHead(server.clients_pending_read,c);
         return 1;
     } else {
@@ -3785,12 +3975,17 @@ int postponeClientRead(client *c) {
  * the queue using the I/O threads, and process them in order to accumulate
  * the reads in the buffers, and also parse the first command available
  * rendering it in the client structures. */
+/* 当读和解析端也启用了线程 I/O 时，
+ * 可读事件处理器会把普通客户端放入待处理队列（而不是同步处理）。
+ * 该函数使用 I/O 线程运行队列，处理客户端以将数据读入缓冲区，
+ * 并解析第一个可用命令，填充到客户端结构体中。 */
 int handleClientsWithPendingReadsUsingThreads(void) {
     if (!server.io_threads_active || !server.io_threads_do_reads) return 0;
     int processed = listLength(server.clients_pending_read);
     if (processed == 0) return 0;
 
     /* Distribute the clients across N different lists. */
+    /* 将客户端分配到 N 个不同的列表中。 */
     listIter li;
     listNode *ln;
     listRewind(server.clients_pending_read,&li);
@@ -3804,6 +3999,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
 
     /* Give the start condition to the waiting threads, by setting the
      * start condition atomic var. */
+    /* 通过设置原子变量，向等待的线程发出启动信号。 */
     io_threads_op = IO_THREADS_OP_READ;
     for (int j = 1; j < server.io_threads_num; j++) {
         int count = listLength(io_threads_list[j]);
@@ -3811,14 +4007,16 @@ int handleClientsWithPendingReadsUsingThreads(void) {
     }
 
     /* Also use the main thread to process a slice of clients. */
+    /* 主线程也会处理一部分客户端。 */
     listRewind(io_threads_list[0],&li);
     while((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        readQueryFromClient(c->conn);
+        readQueryFromClient(c->conn); // 这里相当于手动指定了 conn 的读事件处理器
     }
     listEmpty(io_threads_list[0]);
 
     /* Wait for all the other threads to end their work. */
+    /* 等待所有其他线程完成工作。 */
     while(1) {
         unsigned long pending = 0;
         for (int j = 1; j < server.io_threads_num; j++)
@@ -3826,7 +4024,7 @@ int handleClientsWithPendingReadsUsingThreads(void) {
         if (pending == 0) break;
     }
 
-    /* Run the list of clients again to process the new buffers. */
+    /* 再次遍历客户端列表，处理新缓冲区的数据。 */ /* Run the list of clients again to process the new buffers. */
     while(listLength(server.clients_pending_read)) {
         ln = listFirst(server.clients_pending_read);
         client *c = listNodeValue(ln);
@@ -3835,22 +4033,23 @@ int handleClientsWithPendingReadsUsingThreads(void) {
 
         serverAssert(!(c->flags & CLIENT_BLOCKED));
         if (processPendingCommandsAndResetClient(c) == C_ERR) {
-            /* If the client is no longer valid, we avoid
+            /* 如果客户端不再有效，则避免后续处理，直接跳到下一个。 */ /* If the client is no longer valid, we avoid
              * processing the client later. So we just go
              * to the next. */
             continue;
         }
 
-        processInputBuffer(c);
+        processInputBuffer(c); // 执行命令，读取完成后执行命令操作
 
-        /* We may have pending replies if a thread readQueryFromClient() produced
+        /* 如果线程 readQueryFromClient() 产生了回复但没有安装写处理器（线程无法安装），
+         * 这里需要安装写处理器。 *//* We may have pending replies if a thread readQueryFromClient() produced
          * replies and did not install a write handler (it can't).
          */
         if (!(c->flags & CLIENT_PENDING_WRITE) && clientHasPendingReplies(c))
             clientInstallWriteHandler(c);
     }
 
-    /* Update processed count on server */
+    /* 更新服务器已处理的读操作计数 */ /* Update processed count on server */
     server.stat_io_reads_processed += processed;
 
     return processed;

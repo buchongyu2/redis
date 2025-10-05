@@ -1284,6 +1284,15 @@ void luaSetAllowListProtection(lua_State *lua) {
  * in order to reset the Lua scripting environment.
  *
  * However it is simpler to just call scriptingReset() that does just that. */
+/* 初始化脚本环境。
+ *
+ * 该函数在服务器启动时第一次被调用，此时参数 'setup' 设置为 1。
+ *
+ * 在 Redis 进程生命周期内，也可以在调用过 scriptingRelease() 后再次调用，
+ * 此时 'setup' 设置为 0，用于重置 Lua 脚本环境。
+ *
+ * 不过，更简单的做法是直接调用 scriptingReset()，它只做重置操作。
+ */
 void scriptingInit(int setup) {
     lua_State *lua = lua_open();
 
@@ -1301,13 +1310,15 @@ void scriptingInit(int setup) {
 
     luaLoadLibraries(lua);
 
+    /* 初始化一个字典，用于将 SHA 映射到脚本内容。
+     * 这对于复制很有用，因为需要将 EVALSHA 转换为 EVAL，所以要记住对应的脚本。 */
     /* Initialize a dictionary we use to map SHAs to scripts.
      * This is useful for replication, as we need to replicate EVALSHA
      * as EVAL, so we need to remember the associated script. */
     server.lua_scripts = dictCreate(&shaScriptObjectDictType,NULL);
     server.lua_scripts_mem = 0;
 
-    /* Register the redis commands table and fields */
+    /* 注册 redis 命令表和字段 */ /* Register the redis commands table and fields */
     lua_newtable(lua);
 
     /* redis.call */
@@ -1320,7 +1331,7 @@ void scriptingInit(int setup) {
     lua_pushcfunction(lua,luaRedisPCallCommand);
     lua_settable(lua,-3);
 
-    /* redis.log and log levels. */
+    /* redis.log 及日志级别 */ /* redis.log and log levels. */
     lua_pushstring(lua,"log");
     lua_pushcfunction(lua,luaLogCommand);
     lua_settable(lua,-3);
@@ -1364,7 +1375,7 @@ void scriptingInit(int setup) {
     lua_pushcfunction(lua, luaRedisReplicateCommandsCommand);
     lua_settable(lua, -3);
 
-    /* redis.set_repl and associated flags. */
+    /* redis.set_repl 及相关标志 */ /* redis.set_repl and associated flags. */
     lua_pushstring(lua,"set_repl");
     lua_pushcfunction(lua,luaRedisSetReplCommand);
     lua_settable(lua,-3);
@@ -1399,10 +1410,10 @@ void scriptingInit(int setup) {
     lua_pushcfunction(lua,luaRedisDebugCommand);
     lua_settable(lua,-3);
 
-    /* Finally set the table as 'redis' global var. */
+    /* 最后将表设置为全局变量 redis */ /* Finally set the table as 'redis' global var. */
     lua_setglobal(lua,"redis");
 
-    /* Replace math.random and math.randomseed with our implementations. */
+    /* 替换 math.random 和 math.randomseed 为 Redis 自己的实现 */ /* Replace math.random and math.randomseed with our implementations. */
     lua_getglobal(lua,"math");
 
     lua_pushstring(lua,"random");
@@ -1415,7 +1426,8 @@ void scriptingInit(int setup) {
 
     lua_setglobal(lua,"math");
 
-    /* Add a helper function we use for pcall error reporting.
+    /* 添加辅助函数，用于 pcall 错误报告。
+     * 注意：如果错误发生在 C 函数中，希望报告调用者的信息，这样对调试脚本的用户更有意义。 */ /* Add a helper function we use for pcall error reporting.
      * Note that when the error is in the C function we want to report the
      * information about the caller, that's what makes sense from the point
      * of view of the user debugging a script. */
@@ -1441,25 +1453,28 @@ void scriptingInit(int setup) {
      * inside the Lua interpreter.
      * Note: there is no need to create it again when this function is called
      * by scriptingReset(). */
+    /* 创建一个（非连接的）客户端，用于在 Lua 解释器中执行 Redis 命令。
+     * 注意：如果是 scriptingReset() 调用该函数，则无需再次创建。 */
     if (server.lua_client == NULL) {
         server.lua_client = createClient(NULL);
         server.lua_client->flags |= CLIENT_LUA;
 
-        /* We do not want to allow blocking commands inside Lua */
+        /* 不允许在 Lua 中执行阻塞命令 */ /* We do not want to allow blocking commands inside Lua */
         server.lua_client->flags |= CLIENT_DENY_BLOCKING;
     }
 
-    /* Lock the global table from any changes */
+    /* 锁定全局表，禁止修改 */ /* Lock the global table from any changes */
     lua_pushvalue(lua, LUA_GLOBALSINDEX);
     luaSetErrorMetatable(lua);
-    /* Recursively lock all tables that can be reached from the global table */
+    /* 递归锁定所有可从全局表访问的表 * /* Recursively lock all tables that can be reached from the global table */
     luaSetTableProtectionRecursively(lua);
     lua_pop(lua, 1);
 
     server.lua = lua;
 }
 
-/* Release resources related to Lua scripting.
+/* 释放 Lua 脚本相关资源。
+ * 用于重置脚本环境。 */ /* Release resources related to Lua scripting.
  * This function is used in order to reset the scripting environment. */
 void scriptingRelease(int async) {
     if (async)
@@ -1471,6 +1486,7 @@ void scriptingRelease(int async) {
     lua_close(server.lua);
 }
 
+/* 重置脚本环境 */
 void scriptingReset(int async) {
     scriptingRelease(async);
     scriptingInit(0);

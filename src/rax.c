@@ -1,4 +1,4 @@
-/* Rax -- A radix tree implementation.
+/* 一个基数树实现 Rax -- A radix tree implementation.
  *
  * Version 1.2 -- 7 February 2019
  *

@@ -38,9 +38,9 @@
 #define AE_OK 0
 #define AE_ERR -1
 
-#define AE_NONE 0       /* No events registered. */
-#define AE_READABLE 1   /* Fire when descriptor is readable. */
-#define AE_WRITABLE 2   /* Fire when descriptor is writable. */
+#define AE_NONE 0       /* 没有注册事件 */ /* No events registered. */
+#define AE_READABLE 1   /* 当描述符可读时触发 */ /* Fire when descriptor is readable. */
+#define AE_WRITABLE 2   /* 当描述符可写时触发 */ /* Fire when descriptor is writable. */
 /**
  * AE_BARRIER 的作用
  * 默认行为：
@@ -56,12 +56,12 @@
                            things to disk before sending replies, and want
                            to do that in a group fashion. */
 
-#define AE_FILE_EVENTS (1<<0)
-#define AE_TIME_EVENTS (1<<1)
-#define AE_ALL_EVENTS (AE_FILE_EVENTS|AE_TIME_EVENTS)
-#define AE_DONT_WAIT (1<<2)
-#define AE_CALL_BEFORE_SLEEP (1<<3)
-#define AE_CALL_AFTER_SLEEP (1<<4)
+#define AE_FILE_EVENTS (1<<0) // 文件事件（如 socket 可读/可写）
+#define AE_TIME_EVENTS (1<<1) // 时间事件（定时器）
+#define AE_ALL_EVENTS (AE_FILE_EVENTS|AE_TIME_EVENTS) // 文件事件和定时事件的组合。
+#define AE_DONT_WAIT (1<<2) // 非阻塞模式，不等待事件发生，立即返回。
+#define AE_CALL_BEFORE_SLEEP (1<<3) // 在事件循环休眠前调用回调。
+#define AE_CALL_AFTER_SLEEP (1<<4) // 在事件循环休眠后调用回调。
 
 #define AE_NOMORE -1
 #define AE_DELETED_EVENT_ID -1
@@ -77,12 +77,12 @@ typedef int aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *client
 typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientData);
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 
-/* File event structure */
+/* 文件事件结构体 */ /* File event structure */
 typedef struct aeFileEvent {
-    int mask; /* one of AE_(READABLE|WRITABLE|BARRIER) */
-    aeFileProc *rfileProc;
-    aeFileProc *wfileProc;
-    void *clientData;
+    int mask; /* 事件类型掩码，可能是 AE_READABLE、AE_WRITABLE 或 AE_BARRIER */ /* one of AE_(READABLE|WRITABLE|BARRIER) */
+    aeFileProc *rfileProc;  /* 可读事件处理函数 */
+    aeFileProc *wfileProc;  /* 可写事件处理函数 */
+    void *clientData;  /* 用户自定义数据（如 client 或 connection 指针） */
 } aeFileEvent;
 
 /* Time event structure */
@@ -104,19 +104,19 @@ typedef struct aeFiredEvent {
     int mask;
 } aeFiredEvent;
 
-/* State of an event based program */
+/* 基于事件的程序的状态 */ /* State of an event based program */
 typedef struct aeEventLoop {
-    int maxfd;   /* highest file descriptor currently registered */
-    int setsize; /* max number of file descriptors tracked */
+    int maxfd;   /* 当前已注册的最高文件描述符 */ /* highest file descriptor currently registered */
+    int setsize;  /* 跟踪的最大文件描述符数量 */ /* max number of file descriptors tracked */
     long long timeEventNextId;
-    aeFileEvent *events; /* Registered events */
-    aeFiredEvent *fired; /* Fired events */
-    aeTimeEvent *timeEventHead;
-    int stop;
-    void *apidata; /* This is used for polling API specific data */
-    aeBeforeSleepProc *beforesleep;
-    aeBeforeSleepProc *aftersleep;
-    int flags;
+    aeFileEvent *events; /* 已注册的事件 */ /* Registered events */
+    aeFiredEvent *fired; /* 已触发的事件 */ /* Fired events */
+    aeTimeEvent *timeEventHead; /* 定时事件链表头 */
+    int stop;      /* 是否停止事件循环的标志 */
+    void *apidata; /* 用于轮询 API 的特定数据，对应：aeApiState */ /* This is used for polling API specific data */
+    aeBeforeSleepProc *beforesleep; /* 休眠前的回调函数 */
+    aeBeforeSleepProc *aftersleep;  /* 休眠后的回调函数 */
+    int flags;                      /* 事件循环的标志位 */
 } aeEventLoop;
 
 /* Prototypes */

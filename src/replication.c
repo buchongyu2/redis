@@ -1,4 +1,4 @@
-/* Asynchronous replication implementation.
+/*  异步复制实现。  Asynchronous replication implementation.
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -39,10 +39,29 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 
+/**
+ * 丢弃缓存的主节点信息，通常在复制失败或重置时使用。
+ */
 void replicationDiscardCachedMaster(void);
+
+/**
+ *  复活缓存的主节点，使用给定的连接重新建立主从关系。
+ */
 void replicationResurrectCachedMaster(connection *conn);
+
+/**
+ *  发送复制确认（ACK）给主节点，用于报告从节点的复制进度。
+ */
 void replicationSendAck(void);
+
+/**
+ * 将指定的从节点客户端标记为在线状态，允许其参与复制。
+ */
 void putSlaveOnline(client *slave);
+
+/**
+ * 取消正在进行的复制握手过程，根据 reconnect 参数决定是否尝试重新连接。
+ */
 int cancelReplicationHandshake(int reconnect);
 
 /* We take a global flag to remember if this instance generated an RDB
@@ -107,6 +126,14 @@ int bg_unlink(const char *filename) {
 
 /* ---------------------------------- MASTER -------------------------------- */
 
+/**
+ * 函数用于创建主服务器的复制积压缓冲区（replication backlog）。
+ * 
+ * 作用说明：
+ * 分配一块固定大小的环形缓冲区，用于保存最近一段时间的写命令数据。
+ * 支持主从复制中的部分重同步（PSYNC），让新连接的从节点可以快速同步缺失的数据，而无需全量同步。
+ * 仅在有从节点连接时创建，节省内存资源。
+ */
 void createReplicationBacklog(void) {
     serverAssert(server.repl_backlog == NULL);
     server.repl_backlog = zmalloc(server.repl_backlog_size);
@@ -116,6 +143,7 @@ void createReplicationBacklog(void) {
     /* We don't have any data inside our buffer, but virtually the first
      * byte we have is the next byte that will be generated for the
      * replication stream. */
+    /* 虽然我们的缓冲区里没有任何数据，但实际上第一个字节就是即将为复制流生成的下一个字节。 */
     server.repl_backlog_off = server.master_repl_offset+1;
 }
 
@@ -125,6 +153,11 @@ void createReplicationBacklog(void) {
  * it contains the same data as the previous one (possibly less data, but
  * the most recent bytes, or the same data and more free space in case the
  * buffer is enlarged). */
+/* 
+ * 当用户在运行时修改复制积压大小（replication backlog size）时，会调用此函数。
+ * 该函数负责更新 server.repl_backlog_size，并调整缓冲区大小，使其包含与之前相同的数据
+ *（可能更少数据，但保留最近的字节；或者相同数据，但缓冲区扩大时有更多空闲空间）。
+ */
 void resizeReplicationBacklog(long long newsize) {
     if (newsize < CONFIG_REPL_BACKLOG_MIN_SIZE)
         newsize = CONFIG_REPL_BACKLOG_MIN_SIZE;
@@ -137,11 +170,13 @@ void resizeReplicationBacklog(long long newsize) {
          * The reason is that copying a few gigabytes adds latency and even
          * worse often we need to alloc additional space before freeing the
          * old buffer. */
+        /*我们实际做的是刷新旧缓冲区并重新分配一个新的空缓冲区。它将逐步用新数据填充。
+        原因是复制几 GB 的数据会增加延迟，更糟糕的是，我们经常需要在释放旧缓冲区之前分配额外空间。 */
         zfree(server.repl_backlog);
         server.repl_backlog = zmalloc(server.repl_backlog_size);
         server.repl_backlog_histlen = 0;
         server.repl_backlog_idx = 0;
-        /* Next byte we have is... the next since the buffer is empty. */
+         /* 我们拥有的下一个字节是... 因为缓冲区为空，所以是下一个。 */ /* Next byte we have is... the next since the buffer is empty. */
         server.repl_backlog_off = server.master_repl_offset+1;
     }
 }
@@ -525,6 +560,9 @@ int replicationSetupSlaveForFullResync(client *slave, long long offset) {
  *
  * On success return C_OK, otherwise C_ERR is returned and we proceed
  * with the usual full resync. */
+/* 此函数用于处理主服务器收到部分重同步请求时的 PSYNC 命令。
+ *
+ * 成功时返回 C_OK，否则返回 C_ERR 并继续执行完整重同步。 */
 int masterTryPartialResynchronization(client *c, long long psync_offset) {
     long long psync_len;
     char *master_replid = c->argv[1]->ptr;
@@ -537,11 +575,17 @@ int masterTryPartialResynchronization(client *c, long long psync_offset) {
      *
      * Note that there are two potentially valid replication IDs: the ID1
      * and the ID2. The ID2 however is only valid up to a specific offset. */
+
+    /* 该主服务器的复制ID是否与请求部分重同步的从服务器一致？
+    * 如果复制ID发生变化，则主服务器拥有不同的复制历史，无法继续部分重同步。 ID2 指的是从节点变为主节点之前的maste的 ID。
+    *
+    * 注意：有两个可能有效的复制ID：ID1 和 ID2。
+    * 但 ID2 只在特定偏移量之前有效。 */
     if (strcasecmp(master_replid, server.replid) &&
         (strcasecmp(master_replid, server.replid2) ||
          psync_offset > server.second_replid_offset))
     {
-        /* Replid "?" is used by slaves that want to force a full resync. */
+        /* Replid "?" 用于强制从服务器执行完整重同步。 */ /* Replid "?" is used by slaves that want to force a full resync. */
         if (master_replid[0] != '?') {
             if (strcasecmp(master_replid, server.replid) &&
                 strcasecmp(master_replid, server.replid2))
@@ -562,7 +606,7 @@ int masterTryPartialResynchronization(client *c, long long psync_offset) {
         goto need_full_resync;
     }
 
-    /* We still have the data our slave is asking for? */
+    /* 我们还保留着从服务器请求的数据吗？ */ /* We still have the data our slave is asking for? */
     if (!server.repl_backlog ||
         psync_offset < server.repl_backlog_off ||
         psync_offset > (server.repl_backlog_off + server.repl_backlog_histlen))
@@ -576,6 +620,10 @@ int masterTryPartialResynchronization(client *c, long long psync_offset) {
         goto need_full_resync;
     }
 
+    /* 如果到达这里，说明可以执行部分重同步：
+     * 1）设置客户端状态为从服务器。
+     * 2）通知客户端可以继续（+CONTINUE）。
+     * 3）将 backlog 数据（从指定偏移到末尾）发送给从服务器。 */
     /* If we reached this point, we are able to perform a partial resync:
      * 1) Set client state to make it a slave.
      * 2) Inform the client we can continue with +CONTINUE
@@ -588,6 +636,8 @@ int masterTryPartialResynchronization(client *c, long long psync_offset) {
     /* We can't use the connection buffers since they are used to accumulate
      * new commands at this stage. But we are sure the socket send buffer is
      * empty so this write will never fail actually. */
+    /* 由于连接缓冲区此时用于累积新命令，不能用来发送数据。
+     * 但可以确定 socket 发送缓冲区为空，所以这次写操作不会失败。 */
     if (c->slave_capa & SLAVE_CAPA_PSYNC2) {
         buflen = snprintf(buf,sizeof(buf),"+CONTINUE %s\r\n", server.replid);
     } else {
@@ -602,13 +652,16 @@ int masterTryPartialResynchronization(client *c, long long psync_offset) {
         "Partial resynchronization request from %s accepted. Sending %lld bytes of backlog starting from offset %lld.",
             replicationGetSlaveName(c),
             psync_len, psync_offset);
+
+    /* 注意：不需要将 server.slaveseldb 设置为 -1 来强制主服务器发送 SELECT，
+    * 因为从服务器已经保留了之前与主服务器连接时的状态。 */
     /* Note that we don't need to set the selected DB at server.slaveseldb
      * to -1 to force the master to emit SELECT, since the slave already
      * has this state from the previous connection with the master. */
 
     refreshGoodSlavesCount();
 
-    /* Fire the replica change modules event. */
+    /* 触发副本变更模块事件。 */ /* Fire the replica change modules event. */
     moduleFireServerEvent(REDISMODULE_EVENT_REPLICA_CHANGE,
                           REDISMODULE_SUBEVENT_REPLICA_CHANGE_ONLINE,
                           NULL);
@@ -616,6 +669,9 @@ int masterTryPartialResynchronization(client *c, long long psync_offset) {
     return C_OK; /* The caller can return, no full resync needed. */
 
 need_full_resync:
+    /* 由于某些原因需要完整重同步……注意：如果需要完整 SYNC，
+     * 现在不能立即回复 PSYNC。回复必须包含生成要传输的 RDB 文件时的主服务器偏移量，
+     * 所以需要延迟到那个时刻再回复。 */
     /* We need a full resync for some reason... Note that we can't
      * reply to PSYNC right now if a full SYNC is needed. The reply
      * must include the master offset at the time the RDB file we transfer
@@ -733,10 +789,10 @@ int startBgsaveForReplication(int mincapa) {
 /* SYNC and PSYNC command implementation. */
 /** SYNC 和 PSYNC 命令的实现， syncCommand 函数的实现*/
 void syncCommand(client *c) {
-    /* ignore SYNC if already slave or in monitor mode */
+    /* 如果已经是从服务器或处于监控模式，则忽略 SYNC */ /* ignore SYNC if already slave or in monitor mode */
     if (c->flags & CLIENT_SLAVE) return;
 
-    /* Check if this is a failover request to a replica with the same replid and
+    /* 检查这是否是一个针对具有相同 replid 的副本的故障转移请求，如果是则切换为主服务器。 */ /* Check if this is a failover request to a replica with the same replid and
      * become a master if so. */
     if (c->argc > 3 && !strcasecmp(c->argv[0]->ptr,"psync") && 
         !strcasecmp(c->argv[3]->ptr,"failover"))
@@ -760,13 +816,13 @@ void syncCommand(client *c) {
         }
     }
 
-    /* Don't let replicas sync with us while we're failing over */
+    /* 故障转移期间不允许副本与我们同步 */ /* Don't let replicas sync with us while we're failing over */
     if (server.failover_state != NO_FAILOVER) {
         addReplyError(c,"-NOMASTERLINK Can't SYNC while failing over");
         return;
     }
 
-    /* Refuse SYNC requests if we are a slave but the link with our master
+    /* 如果我们是从服务器，但与主服务器的连接不正常，则拒绝 SYNC 请求 */ /* Refuse SYNC requests if we are a slave but the link with our master
      * is not ok... */
     if (server.masterhost && server.repl_state != REPL_STATE_CONNECTED) {
         addReplyError(c,"-NOMASTERLINK Can't SYNC while not connected with my master");
@@ -777,6 +833,9 @@ void syncCommand(client *c) {
      * the client about already issued commands. We need a fresh reply
      * buffer registering the differences between the BGSAVE and the current
      * dataset, so that we can copy to other slaves if needed. */
+    /* 当服务器有待发送的数据时，不能执行 SYNC。
+     * 需要一个新的回复缓冲区来记录 BGSAVE 与当前数据集之间的差异，
+     * 以便在需要时可以复制给其他从服务器。 */
     if (clientHasPendingReplies(c)) {
         addReplyError(c,"SYNC and PSYNC are invalid with pending output");
         return;
@@ -794,6 +853,12 @@ void syncCommand(client *c) {
      *
      * So the slave knows the new replid and offset to try a PSYNC later
      * if the connection with the master is lost. */
+    /* 如果这是 PSYNC 命令，尝试部分重同步。
+     * 如果失败，则继续完整重同步。
+     * 注意：masterTryPartialResynchronization() 已经回复了：
+     * +FULLRESYNC <replid> <offset>
+     * 所以从服务器知道新的 replid 和 offset，
+     * 如果与主服务器连接丢失，可以稍后尝试 PSYNC。 */
     if (!strcasecmp(c->argv[0]->ptr,"psync")) {
         long long psync_offset;
         if (getLongLongFromObjectOrReply(c, c->argv[2], &psync_offset, NULL) != C_OK) {
@@ -808,6 +873,12 @@ void syncCommand(client *c) {
         } else {
             char *master_replid = c->argv[1]->ptr;
 
+            /* 如果这是 PSYNC 命令，尝试部分重同步。
+             * 如果失败，则继续完整重同步。
+             * 注意：masterTryPartialResynchronization() 已经回复了：
+             * +FULLRESYNC <replid> <offset>
+             * 所以从服务器知道新的 replid 和 offset，
+             * 如果与主服务器连接丢失，可以稍后尝试 PSYNC。 */
             /* Increment stats for failed PSYNCs, but only if the
              * replid is not "?", as this is used by slaves to force a full
              * resync on purpose when they are not albe to partially
@@ -815,29 +886,33 @@ void syncCommand(client *c) {
             if (master_replid[0] != '?') server.stat_sync_partial_err++;
         }
     } else {
+        /* 如果从服务器使用 SYNC，说明是旧版复制协议（如 redis-cli --slave）。
+         * 标记客户端，不期待收到 REPLCONF ACK 反馈。 */
         /* If a slave uses SYNC, we are dealing with an old implementation
          * of the replication protocol (like redis-cli --slave). Flag the client
          * so that we don't expect to receive REPLCONF ACK feedbacks. */
         c->flags |= CLIENT_PRE_PSYNC;
     }
 
-    /* Full resynchronization. */
+    /* 完整重同步 */ /* Full resynchronization. */
     server.stat_sync_full++;
 
     /* Setup the slave as one waiting for BGSAVE to start. The following code
      * paths will change the state if we handle the slave differently. */
+    /* 设置从服务器状态为等待 BGSAVE 开始。后续代码路径会根据不同情况改变状态。 */
     c->replstate = SLAVE_STATE_WAIT_BGSAVE_START;
     if (server.repl_disable_tcp_nodelay)
         connDisableTcpNoDelay(c->conn); /* Non critical if it fails. */
     c->repldbfd = -1;
-    c->flags |= CLIENT_SLAVE;
+    c->flags |= CLIENT_SLAVE; // TODO：当前的客户端是从节点 slave
     listAddNodeTail(server.slaves,c);
 
-    /* Create the replication backlog if needed. */
+    /* 如果需要，创建复制 backlog。 */ /* Create the replication backlog if needed. */
     if (listLength(server.slaves) == 1 && server.repl_backlog == NULL) {
         /* When we create the backlog from scratch, we always use a new
          * replication ID and clear the ID2, since there is no valid
          * past history. */
+        /* 当我们从头创建 backlog 时，总是使用新的复制 ID，并清除 ID2，因为没有有效的历史记录。 */
         changeReplicationId();
         clearReplicationId2();
         createReplicationBacklog();
@@ -845,12 +920,12 @@ void syncCommand(client *c) {
                             "replication IDs are '%s' and '%s'",
                             server.replid, server.replid2);
     }
-
+    /* CASE 1: BGSAVE 正在进行，目标为磁盘。 *//
     /* CASE 1: BGSAVE is in progress, with disk target. */
     if (server.child_type == CHILD_TYPE_RDB &&
         server.rdb_child_type == RDB_CHILD_TYPE_DISK)
     {
-        /* Ok a background save is in progress. Let's check if it is a good
+        /* 当前正在进行后台保存。检查这次保存是否适合用于复制，即是否有其他从服务器在服务器 fork 保存后正在记录数据差异。 */ /* Ok a background save is in progress. Let's check if it is a good
          * one for replication, i.e. if there is another slave that is
          * registering differences since the server forked to save. */
         client *slave;
@@ -862,6 +937,7 @@ void syncCommand(client *c) {
             slave = ln->value;
             /* If the client needs a buffer of commands, we can't use
              * a replica without replication buffer. */
+            /* 如果客户端需要命令缓冲区，则不能使用没有复制缓冲区的副本。 */
             if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END &&
                 (!(slave->flags & CLIENT_REPL_RDBONLY) ||
                  (c->flags & CLIENT_REPL_RDBONLY)))
@@ -869,33 +945,39 @@ void syncCommand(client *c) {
         }
         /* To attach this slave, we check that it has at least all the
          * capabilities of the slave that triggered the current BGSAVE. */
+        /* 为该从服务器附加时，需确保它至少具备触发当前 BGSAVE 的从服务器的所有能力。 */
         if (ln && ((c->slave_capa & slave->slave_capa) == slave->slave_capa)) {
             /* Perfect, the server is already registering differences for
              * another slave. Set the right state, and copy the buffer.
              * We don't copy buffer if clients don't want. */
+            /* 完美，服务器已经为其他从服务器记录差异。设置正确的状态，并复制缓冲区。
+             * 如果客户端不需要，则不复制缓冲区。 */
             if (!(c->flags & CLIENT_REPL_RDBONLY)) copyClientOutputBuffer(c,slave);
             replicationSetupSlaveForFullResync(c,slave->psync_initial_offset);
             serverLog(LL_NOTICE,"Waiting for end of BGSAVE for SYNC");
         } else {
-            /* No way, we need to wait for the next BGSAVE in order to
+            /* 没办法，需要等待下一个 BGSAVE 才能记录差异。 */ /* No way, we need to wait for the next BGSAVE in order to
              * register differences. */
             serverLog(LL_NOTICE,"Can't attach the replica to the current BGSAVE. Waiting for next BGSAVE for SYNC");
         }
 
-    /* CASE 2: BGSAVE is in progress, with socket target. */
+    /* CASE 2: BGSAVE 正在进行，目标为 socket。 */ /* CASE 2: BGSAVE is in progress, with socket target. */
     } else if (server.child_type == CHILD_TYPE_RDB &&
                server.rdb_child_type == RDB_CHILD_TYPE_SOCKET)
     {
         /* There is an RDB child process but it is writing directly to
          * children sockets. We need to wait for the next BGSAVE
          * in order to synchronize. */
+        /* 有一个 RDB 子进程，但它直接写入子进程 socket。需要等待下一个 BGSAVE 才能同步。 */
         serverLog(LL_NOTICE,"Current BGSAVE has socket target. Waiting for next BGSAVE for SYNC");
 
-    /* CASE 3: There is no BGSAVE is progress. */
+    /* CASE 3: 没有 BGSAVE 正在进行。 */ /* CASE 3: There is no BGSAVE is progress. */
     } else {
         if (server.repl_diskless_sync && (c->slave_capa & SLAVE_CAPA_EOF) &&
             server.repl_diskless_sync_delay)
         {
+            /* 如果是无盘复制且副本支持 EOF，并且设置了延迟，则在 replicationCron() 中创建 RDB 子进程，
+             * 因为我们希望延迟几秒以等待更多从服务器到达。 */
             /* Diskless replication RDB child is created inside
              * replicationCron() since we want to delay its start a
              * few seconds to wait for more slaves to arrive. */
@@ -903,6 +985,7 @@ void syncCommand(client *c) {
         } else {
             /* We don't have a BGSAVE in progress, let's start one. Diskless
              * or disk-based mode is determined by replica's capacity. */
+            /* 没有正在进行的 BGSAVE，启动一个新的。无盘或基于磁盘的模式由副本能力决定。 */
             if (!hasActiveChildProcess()) {
                 startBgsaveForReplication(c->slave_capa);
             } else {
@@ -2890,6 +2973,14 @@ void roleCommand(client *c) {
 /* Send a REPLCONF ACK command to the master to inform it about the current
  * processed offset. If we are not connected with a master, the command has
  * no effects. */
+/* 
+ * 
+ * 主节点发送：REPLCONF GETACK *
+ * 从节点发送：REPLCONF ACK <offset>
+ * 
+ * 发送一个 REPLCONF ACK 命令给主节点，以告知当前处理的偏移量。
+ * 如果未与主节点连接，该命令不会产生任何效果。 */
+
 void replicationSendAck(void) {
     client *c = server.master;
 
@@ -3643,6 +3734,19 @@ void abortFailover(const char *err) {
  * a replica to sync up before aborting. If not specified, the failover
  * will attempt forever and must be manually aborted.
  */
+/*
+ *
+ * FAILOVER [TO <HOST> <PORT> [FORCE]] [ABORT] [TIMEOUT <timeout>]
+ * 此命令将在主节点与其副本之一之间协调故障转移。正常路径包含以下步骤：
+ * 主节点将启动客户端暂停写入，以停止复制流量。
+ * 主节点将定期检查其任何副本是否通过确认消耗了整个复制流。
+ * 一旦任何副本赶上，主节点将自己成为副本。
+ * 主节点将向目标副本发送 PSYNC FAILOVER 请求，如果接受，将导致副本成为新主节点并启动同步。
+ * FAILOVER ABORT 是中止故障转移命令的唯一方法，因为 replicaof 将被禁用。如果故障转移无法进行，可能需要此操作。
+ * 可选参数 [TO <HOST> <IP>] 允许指定要故障转移到的特定副本。
+ * FORCE 标志表示即使目标副本尚未赶上，也要强制故障转移到它。这必须与超时和目标 HOST 和 IP 一起指定。
+ * TIMEOUT <timeout> 表示主节点应等待副本同步多长时间才中止。如果未指定，故障转移将无限尝试，必须手动中止。
+ */
 void failoverCommand(client *c) {
     if (server.cluster_enabled) {
         addReplyError(c,"FAILOVER not allowed in cluster mode. "
@@ -3650,7 +3754,7 @@ void failoverCommand(client *c) {
         return;
     }
     
-    /* Handle special case for abort */
+    /* 处理中止的特殊情况 */ /* Handle special case for abort */
     if ((c->argc == 2) && !strcasecmp(c->argv[1]->ptr,"abort")) {
         if (server.failover_state == NO_FAILOVER) {
             addReplyError(c, "No failover in progress.");
@@ -3667,7 +3771,7 @@ void failoverCommand(client *c) {
     long port = 0;
     char *host = NULL;
 
-    /* Parse the command for syntax and arguments. */
+     /* 解析命令的语法和参数。 */ /* Parse the command for syntax and arguments. */
     for (int j = 1; j < c->argc; j++) {
         if (!strcasecmp(c->argv[j]->ptr,"timeout") && (j + 1 < c->argc) &&
             timeout_in_ms == 0)
@@ -3715,7 +3819,7 @@ void failoverCommand(client *c) {
         return;     
     }
 
-    /* If a replica address was provided, validate that it is connected. */
+     /* 如果提供了副本地址，则验证它是否已连接。 */ /* If a replica address was provided, validate that it is connected. */
     if (host) {
         client *replica = findReplica(host, port);
 
@@ -3725,7 +3829,7 @@ void failoverCommand(client *c) {
             return;
         }
 
-        /* Check if requested replica is online */
+        /* 检查请求的副本是否在线 */ /* Check if requested replica is online */
         if (replica->replstate != SLAVE_STATE_ONLINE) {
             addReplyError(c,"FAILOVER target replica is not online.");
             return;
@@ -3745,7 +3849,7 @@ void failoverCommand(client *c) {
     
     server.force_failover = force_flag;
     server.failover_state = FAILOVER_WAIT_FOR_SYNC;
-    /* Cluster failover will unpause eventually */
+     /* 集群故障转移最终将取消暂停 */ /* Cluster failover will unpause eventually */
     pauseClients(LLONG_MAX,CLIENT_PAUSE_WRITE);
     addReply(c,shared.ok);
 }
@@ -3757,29 +3861,34 @@ void failoverCommand(client *c) {
  * failover doesn't work like blocked clients will be unblocked and replicas will
  * be disconnected. This could be optimized further.
  */
+/* 故障转移 cron 函数，检查协调故障转移状态。 *
+ *
+ * 实现说明：当前实现调用 replicationSetMaster() 来启动故障转移请求，如果故障转移不工作，
+ * 这会有一些意外的副作用，比如阻塞的客户端将被解除阻塞，副本将被断开连接。这可以进一步优化。 
+ **/
 void updateFailoverStatus(void) {
     if (server.failover_state != FAILOVER_WAIT_FOR_SYNC) return;
     mstime_t now = server.mstime;
 
-    /* Check if failover operation has timed out */
+    /* 检查故障转移操作是否已超时 */ /* Check if failover operation has timed out */
     if (server.failover_end_time && server.failover_end_time <= now) {
         if (server.force_failover) {
             serverLog(LL_NOTICE,
                 "FAILOVER to %s:%d time out exceeded, failing over.",
                 server.target_replica_host, server.target_replica_port);
             server.failover_state = FAILOVER_IN_PROGRESS;
-            /* If timeout has expired force a failover if requested. */
+            /* 如果超时已过期，则强制执行故障转移（如果请求）。 */ /* If timeout has expired force a failover if requested. */
             replicationSetMaster(server.target_replica_host,
                 server.target_replica_port);
             return;
         } else {
-            /* Force was not requested, so timeout. */
+            /* 未请求强制，所以超时。 */ /* Force was not requested, so timeout. */
             abortFailover("Replica never caught up before timeout");
             return;
         }
     }
 
-    /* Check to see if the replica has caught up so failover can start */
+    /* 检查副本是否已赶上，以便启动故障转移 */ /* Check to see if the replica has caught up so failover can start */
     client *replica = NULL;
     if (server.target_replica_host) {
         replica = findReplica(server.target_replica_host, 
@@ -3789,7 +3898,7 @@ void updateFailoverStatus(void) {
         listNode *ln;
 
         listRewind(server.slaves,&li);
-        /* Find any replica that has matched our repl_offset */
+        /* 查找任何匹配我们 repl_offset 的副本 */ /* Find any replica that has matched our repl_offset */
         while((ln = listNext(&li))) {
             replica = ln->value;
             if (replica->repl_ack_off == server.master_repl_offset) {
@@ -3801,7 +3910,7 @@ void updateFailoverStatus(void) {
                     replicaaddr = ip;
                 }
 
-                /* We are now failing over to this specific node */
+                /* 我们现在正在故障转移到这个特定节点 */ /* We are now failing over to this specific node */
                 server.target_replica_host = zstrdup(replicaaddr);
                 server.target_replica_port = replica->slave_listening_port;
                 break;
@@ -3809,13 +3918,13 @@ void updateFailoverStatus(void) {
         }
     }
 
-    /* We've found a replica that is caught up */
+    /* 我们找到了一个已赶上的副本 */ /* We've found a replica that is caught up */
     if (replica && (replica->repl_ack_off == server.master_repl_offset)) {
         server.failover_state = FAILOVER_IN_PROGRESS;
         serverLog(LL_NOTICE,
                 "Failover target %s:%d is synced, failing over.",
                 server.target_replica_host, server.target_replica_port);
-        /* Designated replica is caught up, failover to it. */
+        /* 指定副本已赶上，故障转移到它。 */ /* Designated replica is caught up, failover to it. */
         replicationSetMaster(server.target_replica_host,
             server.target_replica_port);
     }

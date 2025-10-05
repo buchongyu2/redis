@@ -1,4 +1,4 @@
-/* Implementation of EXPIRE (keys with fixed time to live).
+/* EXPIRE 的实现（具有固定生存时间的键）。 Implementation of EXPIRE (keys with fixed time to live).
  *
  * ----------------------------------------------------------------------------
  *
@@ -51,6 +51,23 @@
  *
  * The parameter 'now' is the current time in milliseconds as is passed
  * to the function to avoid too many gettimeofday() syscalls. */
+/*-----------------------------------------------------------------------------
+ * 过期键的增量清理。
+ *
+ * 当键被访问时，它们会在访问时过期。然而，我们需要一种机制来确保
+ * 即使没有对键进行访问，它们在过期后也能最终被移除。
+ *----------------------------------------------------------------------------*/
+/* activeExpireCycle() 函数的辅助函数。
+ * 该函数会尝试清理存储在 Redis 数据库的 'expires' 哈希表中的
+ * 哈希表条目 'de' 所对应的键。
+ *
+ * 如果发现键已过期，则将其从数据库中移除并返回 1。
+ * 否则，不执行任何操作并返回 0。
+ *
+ * 当一个键过期时，server.stat_expiredkeys 会递增。
+ *
+ * 参数 'now' 是当前的毫秒级时间，用于避免过多的 gettimeofday() 系统调用。
+ */
 int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
     long long t = dictGetSignedIntegerVal(de);
     if (now > t) {
@@ -584,17 +601,18 @@ void ttlGenericCommand(client *c, int output_ms) {
     }
 }
 
-/* TTL key */
+/* 设置Key 的过期时间 */ /* TTL key */
 void ttlCommand(client *c) {
     ttlGenericCommand(c, 0);
 }
 
-/* PTTL key */
+/* 设置Key 的过期时间 */ /* PTTL key */
 void pttlCommand(client *c) {
     ttlGenericCommand(c, 1);
 }
 
 /* PERSIST key */
+/* 持久化key，取消 key 的过期时间 */
 void persistCommand(client *c) {
     if (lookupKeyWrite(c->db,c->argv[1])) {
         if (removeExpire(c->db,c->argv[1])) {
@@ -611,6 +629,8 @@ void persistCommand(client *c) {
 }
 
 /* TOUCH key1 [key2 key3 ... keyN] */
+/* 这个函数是 Redis 中实现 TOUCH 命令的逻辑。TOUCH 命令的作用是更新指定键的访问时间，但并不会返回键的值。
+ * 它主要用于某些缓存淘汰策略（如 LRU 或 LFU）中，更新键的访问时间以影响键的淘汰顺序。 */
 void touchCommand(client *c) {
     int touched = 0;
     for (int j = 1; j < c->argc; j++)

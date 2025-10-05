@@ -76,7 +76,9 @@ ConnectionType CT_Socket;
 
 connection *connCreateSocket() {
     connection *conn = zcalloc(sizeof(connection));
-    conn->type = &CT_Socket;
+    conn->type = &CT_Socket; // 设置处理函数，如：static inline int connSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
+                             // return conn->type->set_read_handler(conn, func);
+                             // }
     conn->fd = -1;
 
     return conn;
@@ -92,9 +94,17 @@ connection *connCreateSocket() {
  * is not in an error state (which is not possible for a socket connection,
  * but could but possible with other protocols).
  */
+/* 创建一个新的 socket 类型连接，并且已经关联了一个已接受的连接。
+ *
+ * 在调用 connAccept() 并执行连接级别的 accept 处理器之前，
+ * 该 socket 还不能进行 I/O 操作。
+ *
+ * 调用者应该使用 connGetState() 并确认新创建的连接没有处于错误状态
+ * （对于 socket 连接来说不会出错，但其他协议可能会）。
+ */
 connection *connCreateAcceptedSocket(int fd) {
-    connection *conn = connCreateSocket();
-    conn->fd = fd;
+    connection *conn = connCreateSocket(); // 创建 socket 连接对象，这里将 conn->type 设置为 &CT_Socket，CT_Socket 是 ConnectionType 结构体，提供了 各种操作函数指针
+    conn->fd = fd; // 关联已接受的 socket 文件描述符
     conn->state = CONN_STATE_ACCEPTING;
     return conn;
 }
@@ -226,6 +236,7 @@ static int connSocketAccept(connection *conn, ConnectionCallbackFunc accept_hand
  * 这会导致设置 CONN_FLAG_WRITE_BARRIER 标志。
  * 写屏障确保在单次事件循环中，写事件处理器总是
  * 在读事件处理器之前被调用，而不是之后。
+ * 
  */
 static int connSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier) {
     if (func == conn->write_handler) return C_OK;
@@ -246,10 +257,18 @@ static int connSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc fu
 /* Register a read handler, to be called when the connection is readable.
  * If NULL, the existing handler is removed.
  */
+/* 注册一个读处理器，当连接可读时被调用。
+ * 如果传入 NULL，则移除已有的处理器。
+ * 通过 connSocketSetReadHandler 设置该事件处理函数
+ * 
+ * 
+ * 这里设置了 read_handler 为readQueryFromClient函数并且注册了 AE_READABLE 事件处理函数为: connSocketEventHandler
+ * 事件处理函数，无论是可读还是可写，都是先调用connSocketEventHandler，然后在该函数中根据 read_handler 或 write_handler 实际分发到你的业务回调。
+ */
 static int connSocketSetReadHandler(connection *conn, ConnectionCallbackFunc func) {
     if (func == conn->read_handler) return C_OK;
 
-    conn->read_handler = func;
+    conn->read_handler = func; // 设置新的读处理器, rfileProc
     if (!conn->read_handler)
         aeDeleteFileEvent(server.el,conn->fd,AE_READABLE);
     else
@@ -262,6 +281,11 @@ static const char *connSocketGetLastError(connection *conn) {
     return strerror(conn->last_errno);
 }
 
+/**
+ * 设置 AE_READABLE 是为了让事件循环（如 epoll/select）关注这个 fd 的可读事件。
+ * 设置 ae_handler 是为了告诉事件循环，当 fd 可读时，应该调用哪个统一的处理函数（如 connSocketEventHandler），它会再根据 read_handler 或 write_handler 实际分发到你的业务回调。
+ * 三者配合，才能实现 fd 可读时自动调用你的 read_handler
+ */
 static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask)
 {
     UNUSED(el);

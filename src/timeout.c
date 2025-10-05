@@ -133,8 +133,9 @@ void removeClientFromTimeoutTable(client *c) {
 
 /* This function is called in beforeSleep() in order to unblock clients
  * that are waiting in blocking operations with a timeout set. */
+/* 该函数在 beforeSleep() 中调用，用于解除那些设置了超时的阻塞操作客户端的阻塞状态。 */
 void handleBlockedClientsTimeout(void) {
-    if (raxSize(server.clients_timeout_table) == 0) return;
+    if (raxSize(server.clients_timeout_table) == 0) return;  // 如果没有超时的客户端，直接返回
     uint64_t now = mstime();
     raxIterator ri;
     raxStart(&ri,server.clients_timeout_table);
@@ -143,12 +144,12 @@ void handleBlockedClientsTimeout(void) {
     while(raxNext(&ri)) {
         uint64_t timeout;
         client *c;
-        decodeTimeoutKey(ri.key,&timeout,&c);
-        if (timeout >= now) break; /* All the timeouts are in the future. */
-        c->flags &= ~CLIENT_IN_TO_TABLE;
-        checkBlockedClientTimeout(c,now);
-        raxRemove(server.clients_timeout_table,ri.key,ri.key_len,NULL);
-        raxSeek(&ri,"^",NULL,0);
+        decodeTimeoutKey(ri.key,&timeout,&c); // 从 key 中解码出超时时间和客户端指针
+        if (timeout >= now) break;        /* 后面的超时时间都在未来，提前结束循环 *//* All the timeouts are in the future. */
+        c->flags &= ~CLIENT_IN_TO_TABLE;   // 清除客户端在超时表中的标志
+        checkBlockedClientTimeout(c,now);  // 检查并处理客户端超时
+        raxRemove(server.clients_timeout_table,ri.key,ri.key_len,NULL); // 从超时表中移除该客户端
+        raxSeek(&ri,"^",NULL,0);  // 重新定位迭代器，确保安全遍历
     }
     raxStop(&ri);
 }

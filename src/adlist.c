@@ -1,4 +1,4 @@
-/* adlist.c - A generic doubly linked list implementation
+/* 通用的双向链表实现  adlist.c - A generic doubly linked list implementation
  *
  * Copyright (c) 2006-2010, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -39,6 +39,11 @@
  * listSetFreeMethod.
  *
  * On error, NULL is returned. Otherwise the pointer to the new list. */
+/* 创建一个新链表。创建的链表可以通过 listRelease() 释放，
+ * 但每个节点的私有值需要在调用 listRelease() 前由用户释放，
+ * 或者通过设置释放方法（listSetFreeMethod）来释放。
+ *
+ * 如果出错，返回 NULL。否则返回新链表的指针。 */
 list *listCreate(void)
 {
     struct list *list;
@@ -112,6 +117,10 @@ list *listAddNodeHead(list *list, void *value)
  * On error, NULL is returned and no operation is performed (i.e. the
  * list remains unaltered).
  * On success the 'list' pointer you pass to the function is returned. */
+/* 向链表尾部添加一个新节点，节点的值为指定的 'value' 指针。
+ *
+ * 如果出错，返回 NULL，且不会进行任何操作（链表保持不变）。
+ * 如果成功，返回你传入的 'list' 指针。 */
 list *listAddNodeTail(list *list, void *value)
 {
     listNode *node;
@@ -203,11 +212,19 @@ void listReleaseIterator(listIter *iter) {
 }
 
 /* Create an iterator in the list private iterator structure */
+/* 
+ * 在链表的私有迭代器结构中创建一个迭代器
+ * 从头开始遍历
+ */
 void listRewind(list *list, listIter *li) {
     li->next = list->head;
     li->direction = AL_START_HEAD;
 }
 
+/**
+ * 在链表的私有迭代器结构中创建一个迭代器
+ * 从尾部开始迭代
+ */
 void listRewindTail(list *list, listIter *li) {
     li->next = list->tail;
     li->direction = AL_START_TAIL;

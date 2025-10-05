@@ -71,10 +71,10 @@ typedef struct dictType {
 /* This is our hash table structure. Every dictionary has two of this as we
  * implement incremental rehashing, for the old to the new table. */
 typedef struct dictht {
-    dictEntry **table;
-    unsigned long size;
-    unsigned long sizemask;
-    unsigned long used;
+    dictEntry **table;       // 哈希表数组 
+    unsigned long size;      // 哈希表大小, 决定了哈希表能容纳的槽位数量
+    unsigned long sizemask;  // 哈希表大小掩码，用于计算索引值
+    unsigned long used;      // 不是槽位数量，而是实际的节点数量。通过这里是否为 0 判断是否rehash 结束。
 } dictht;
 
 typedef struct dict {
@@ -101,8 +101,8 @@ typedef struct dictIterator {
 typedef void (dictScanFunction)(void *privdata, const dictEntry *de);
 typedef void (dictScanBucketFunction)(void *privdata, dictEntry **bucketref);
 
-/* This is the initial size of every hash table */
-#define DICT_HT_INITIAL_SIZE     4
+/* 这是每个哈希表的初始大小 */ /* This is the initial size of every hash table */
+#define DICT_HT_INITIAL_SIZE     4 //
 
 /* ------------------------------- Macros ------------------------------------*/
 #define dictFreeVal(d, entry) \
@@ -149,11 +149,11 @@ typedef void (dictScanBucketFunction)(void *privdata, dictEntry **bucketref);
 #define dictGetDoubleVal(he) ((he)->v.d)
 #define dictSlots(d) ((d)->ht[0].size+(d)->ht[1].size)
 #define dictSize(d) ((d)->ht[0].used+(d)->ht[1].used)
-#define dictIsRehashing(d) ((d)->rehashidx != -1)
+#define dictIsRehashing(d) ((d)->rehashidx != -1)         /* 判断字典是否正在进行 rehash 操作（rehashidx 不为 -1 时表示正在迁移数据）。 */
 #define dictPauseRehashing(d) (d)->pauserehash++
 #define dictResumeRehashing(d) (d)->pauserehash--
 
-/* If our unsigned long type can store a 64 bit number, use a 64 bit PRNG. */
+/* 如果我们的 unsigned long 类型可以存储 64 位数字，则使用 64 位伪随机数生成器（PRNG）。 */ /* If our unsigned long type can store a 64 bit number, use a 64 bit PRNG. */
 #if ULONG_MAX >= 0xffffffffffffffff
 #define randomULong() ((unsigned long) genrand64_int64())
 #else
