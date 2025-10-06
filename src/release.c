@@ -30,6 +30,8 @@
 /* Every time the Redis Git SHA1 or Dirty status changes only this small
  * file is recompiled, as we access this information in all the other
  * files using this functions. */
+/* 每次 Redis 的 Git SHA1 或 Dirty 状态发生变化时，只有这个小文件会被重新编译，
+ * 因为我们在所有其他文件中通过这些函数访问此信息。 */
 
 #include <string.h>
 #include <stdio.h>
@@ -55,6 +57,8 @@ uint64_t redisBuildId(void) {
 /* Return a cached value of the build string in order to avoid recomputing
  * and converting it in hex every time: this string is shown in the INFO
  * output that should be fast. */
+/* 返回构建字符串的缓存值，以避免每次都重新计算并转换为十六进制：
+ * 这个字符串会显示在 INFO 输出中，而 INFO 输出应该是快速的。 */
 char *redisBuildIdString(void) {
     static char buf[32];
     static int cached = 0;
