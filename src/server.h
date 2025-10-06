@@ -523,6 +523,9 @@ typedef enum
  * The actual resolution depends on server.hz. */
 /* 用下面的宏可以在 serverCron() 中按指定周期（毫秒）运行代码。
  * 实际分辨率取决于 server.hz。 */
+/**
+ * 相当于把对应的 if 代码块放在 serverCron() 函数中，每秒执行 server.hz 次
+ */
 #define run_with_period(_ms_) if ((_ms_ <= 1000 / server.hz) || !(server.cronloops % ((_ms_) / (1000 / server.hz))))
 
 /* We can print the stacktrace, so our assert is defined this way: */
@@ -964,10 +967,12 @@ typedef struct
 
 /* With multiplexing we need to take per-client state.
  * Clients are taken in a linked list. */
+/* 在多路复用中，我们需要为每个客户端维护状态。
+ * 客户端以链表的形式存储。 */
 
 #define CLIENT_ID_AOF                                                                                                  \
-    (UINT64_MAX) /* Reserved ID for the AOF client. If you                                                             \
-                    need more reserved IDs use UINT64_MAX-1,                                                           \
+    (UINT64_MAX)    /* 为 AOF 客户端保留的 ID。如果需要更多保留 ID，请使用 UINT64_MAX-1、-2 等。 */ /* Reserved ID for the AOF client. If you                                                             \
+                     need more reserved IDs use UINT64_MAX-1,                                                           \
                     -2, ... and so forth. */
 
 typedef struct client
@@ -1597,7 +1602,7 @@ struct redisServer
     long long second_replid_offset; /* 对于 replid2，允许的最大偏移量 */ /* Accept offsets up to this for replid2. */
     int slaveseldb;                 /* 复制输出中最近一次 SELECT 的数据库编号 */ /* Last SELECTed DB in replication output */
     int repl_ping_slave_period;     /* 主节点每 N 秒 ping 一次从节点 *//* Master pings the slave every N seconds */
-    char *repl_backlog;             /* 用于部分同步的复制积压缓冲区 */ /* Replication backlog for partial syncs */
+    char *repl_backlog;             /* 用于部分同步的：环形复制积压缓冲区 */ /* Replication backlog for partial syncs */
     long long repl_backlog_size;    /* 积压缓冲区的环形缓冲区大小 */ /* Backlog circular buffer size */
     long long repl_backlog_histlen; /* 积压缓冲区实际数据长度 */ /* Backlog actual data length */
     long long repl_backlog_idx;     /* 积压缓冲区当前写入偏移量，下一个要写入的字节位置 */ /* Backlog circular buffer current offset,
@@ -1706,8 +1711,8 @@ struct redisServer
                                                                   blocked_last_cron. */
     long long blocked_last_cron;  /* 标记上一次因阻塞操作执行定时任务的毫秒时间 */ /* Indicate the mstime of the last time we did cron jobs from a blocking operation */
     /* 发布订阅 */ /* Pubsub */
-    dict *pubsub_channels;      /* 频道到已订阅客户端列表的映射 */ /* Map channels to list of subscribed clients */
-    dict *pubsub_patterns;      /* 发布订阅模式的字典 */ /* A dict of pubsub_patterns */
+    dict *pubsub_channels;      /* [频道]到已订阅客户端列表的映射 */ /* Map channels to list of subscribed clients */
+    dict *pubsub_patterns;      /* 发布订阅[模式]的字典 */ /* A dict of pubsub_patterns */
     int notify_keyspace_events; /* 通过发布/订阅传播的事件，是NOTIFY_...标志的异或值 */ /* Events to propagate via Pub/Sub. This is an
                                    xor of NOTIFY_... flags. */
     /* 集群 */ /* Cluster */
