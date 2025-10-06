@@ -1,4 +1,4 @@
-/* Linux epoll(2) based ae.c module
+/*  基于 Linux epoll(2) 的 ae.c 模块；Linux epoll(2) based ae.c module
  *
  * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -76,11 +76,14 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
     struct epoll_event ee = {0}; /* avoid valgrind warning */
     /* If the fd was already monitored for some event, we need a MOD
      * operation. Otherwise we need an ADD operation. */
+    /* 避免 valgrind 警告 */
+    /* 如果 fd 已经被监控某些事件，我们需要执行 MOD 操作。
+     * 否则我们需要执行 ADD 操作。 */
     int op = eventLoop->events[fd].mask == AE_NONE ?
             EPOLL_CTL_ADD : EPOLL_CTL_MOD;
 
     ee.events = 0;
-    mask |= eventLoop->events[fd].mask; /* Merge old events */
+    mask |= eventLoop->events[fd].mask; /* 合并旧的事件 */ /* Merge old events */
     if (mask & AE_READABLE) ee.events |= EPOLLIN;
     if (mask & AE_WRITABLE) ee.events |= EPOLLOUT;
     ee.data.fd = fd;
@@ -90,7 +93,7 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
 
 static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int delmask) {
     aeApiState *state = eventLoop->apidata;
-    struct epoll_event ee = {0}; /* avoid valgrind warning */
+    struct epoll_event ee = {0}; /* 避免 valgrind 警告 */ /* avoid valgrind warning */
     int mask = eventLoop->events[fd].mask & (~delmask);
 
     ee.events = 0;
@@ -102,6 +105,8 @@ static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int delmask) {
     } else {
         /* Note, Kernel < 2.6.9 requires a non null event pointer even for
          * EPOLL_CTL_DEL. */
+        /* 注意，内核版本 < 2.6.9 即使对于 EPOLL_CTL_DEL 操作，
+         * 也需要一个非空的事件指针。 */
         epoll_ctl(state->epfd,EPOLL_CTL_DEL,fd,&ee);
     }
 }
