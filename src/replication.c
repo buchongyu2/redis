@@ -75,6 +75,9 @@ int RDBGeneratedByReplication = 0;
  * pair. Mostly useful for logging, since we want to log a slave using its
  * IP address and its listening port which is more clear for the user, for
  * example: "Closing connection with replica 10.1.2.3:6380". */
+/* 返回指向表示从节点 ip:listening_port 对的字符串的指针。
+ * 主要用于日志记录，因为我们希望使用从节点的 IP 地址和监听端口记录日志，
+ * 这样对用户来说更清晰，例如："Closing connection with replica 10.1.2.3:6380"。 */
 char *replicationGetSlaveName(client *c) {
     static char buf[NET_HOST_PORT_STR_LEN];
     char ip[NET_IP_STR_LEN];
@@ -102,25 +105,32 @@ char *replicationGetSlaveName(client *c) {
  * by using the fact that if there is another instance of the same file open,
  * the foreground unlink() will only remove the fs name, and deleting the
  * file's storage space will only happen once the last reference is lost. */
+/* 普通的 unlink() 可能会阻塞一段时间，以便实际将文件删除应用到文件系统。
+ * 此调用改为在后台线程中删除文件。实际上，我们只是在线程中执行 close()，
+ * 利用以下事实：如果同一文件的另一个实例仍然打开，则前台 unlink() 只会删除文件系统名称，
+ * 而删除文件的存储空间只有在最后一个引用丢失时才会发生。 */
 int bg_unlink(const char *filename) {
     int fd = open(filename,O_RDONLY|O_NONBLOCK);
     if (fd == -1) {
-        /* Can't open the file? Fall back to unlinking in the main thread. */
+        /* 无法打开文件？回退到主线程中执行 unlink。 */ /* Can't open the file? Fall back to unlinking in the main thread. */
         return unlink(filename);
     } else {
         /* The following unlink() removes the name but doesn't free the
          * file contents because a process still has it open. */
+        /* 以下 unlink() 删除了文件名，但不会释放文件内容，
+         * 因为仍有进程打开了该文件。 */
         int retval = unlink(filename);
         if (retval == -1) {
             /* If we got an unlink error, we just return it, closing the
              * new reference we have to the file. */
+            /* 如果我们遇到 unlink 错误，只需返回错误，并关闭我们对文件的新引用。 */
             int old_errno = errno;
-            close(fd);  /* This would overwrite our errno. So we saved it. */
+            close(fd);  /* 这会覆盖我们的 errno，因此我们将其保存下来。 */ /* This would overwrite our errno. So we saved it. */
             errno = old_errno;
             return -1;
         }
         bioCreateCloseJob(fd);
-        return 0; /* Success. */
+        return 0; /* 成功。 */ /* Success. */
     }
 }
 
@@ -191,6 +201,9 @@ void freeReplicationBacklog(void) {
  * This function also increments the global replication offset stored at
  * server.master_repl_offset, because there is no case where we want to feed
  * the backlog without incrementing the offset. */
+/* 将数据添加到复制 backlog。
+ * 此函数还会增加存储在 server.master_repl_offset 中的全局复制偏移量，
+ * 因为在任何情况下我们都不会在不增加偏移量的情况下填充 backlog。 */
 void feedReplicationBacklog(void *ptr, size_t len) {
     unsigned char *p = ptr;
 
@@ -198,6 +211,8 @@ void feedReplicationBacklog(void *ptr, size_t len) {
 
     /* This is a circular buffer, so write as much data we can at every
      * iteration and rewind the "idx" index if we reach the limit. */
+    /* 这是一个循环缓冲区，因此在每次迭代中尽可能多地写入数据，
+     * 如果达到限制，则重置 "idx" 索引。 */
     while(len) {
         size_t thislen = server.repl_backlog_size - server.repl_backlog_idx;
         if (thislen > len) thislen = len;
@@ -211,13 +226,14 @@ void feedReplicationBacklog(void *ptr, size_t len) {
     }
     if (server.repl_backlog_histlen > server.repl_backlog_size)
         server.repl_backlog_histlen = server.repl_backlog_size;
-    /* Set the offset of the first byte we have in the backlog. */
+    /* 设置 backlog 中第一个字节的偏移量。 */ /* Set the offset of the first byte we have in the backlog. */
     server.repl_backlog_off = server.master_repl_offset -
                               server.repl_backlog_histlen + 1;
 }
 
 /* Wrapper for feedReplicationBacklog() that takes Redis string objects
  * as input. */
+/* feedReplicationBacklog() 的包装函数，接受 Redis 字符串对象作为输入。 */
 void feedReplicationBacklogWithObject(robj *o) {
     char llstr[LONG_STR_SIZE];
     void *p;
@@ -234,10 +250,10 @@ void feedReplicationBacklogWithObject(robj *o) {
 }
 
 int canFeedReplicaReplBuffer(client *replica) {
-    /* Don't feed replicas that only want the RDB. */
+    /* 不向只需要 RDB 的从节点提供数据。 */ /* Don't feed replicas that only want the RDB. */
     if (replica->flags & CLIENT_REPL_RDBONLY) return 0;
 
-    /* Don't feed replicas that are still waiting for BGSAVE to start. */
+    /* 不向仍在等待 BGSAVE 启动的从节点提供数据。 */ /* Don't feed replicas that are still waiting for BGSAVE to start. */
     if (replica->replstate == SLAVE_STATE_WAIT_BGSAVE_START) return 0;
 
     return 1;
@@ -263,20 +279,24 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
      * propagate *identical* replication stream. In this way this slave can
      * advertise the same replication ID as the master (since it shares the
      * master replication history and has the same backlog and offsets). */
+    /* 如果实例不是顶级主节点，尽快返回：我们将仅代理从主节点接收到的数据流，
+     * 以便传播*完全相同*的复制流。通过这种方式，该从节点可以声明与主节点相同的
+     * 复制 ID（因为它共享主节点的复制历史，并具有相同的 backlog 和偏移量）。 */
     if (server.masterhost != NULL) return;
 
     /* If there aren't slaves, and there is no backlog buffer to populate,
      * we can return ASAP. */
+    /* 如果没有从节点，并且没有 backlog 缓冲区需要填充，我们可以尽快返回。 */
     if (server.repl_backlog == NULL && listLength(slaves) == 0) return;
 
-    /* We can't have slaves attached and no backlog. */
+    /* 我们不能在有从节点连接的情况下没有 backlog。 */ /* We can't have slaves attached and no backlog. */
     serverAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
 
     /* 如果需要，向每个从节点发送 SELECT 命令。 */ /* Send SELECT command to every slave if needed. */
     if (server.slaveseldb != dictid) {
         robj *selectcmd;
 
-        /* For a few DBs we have pre-computed SELECT command. */
+        /* 对于少量数据库，我们预先计算了 SELECT 命令。 */ /* For a few DBs we have pre-computed SELECT command. */
         if (dictid >= 0 && dictid < PROTO_SHARED_SELECT_CMDS) {
             selectcmd = shared.select[dictid];
         } else {
@@ -289,10 +309,10 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
                 dictid_len, llstr));
         }
 
-        /* Add the SELECT command into the backlog. */
+        /* 将 SELECT 命令添加到 backlog 中。 */ /* Add the SELECT command into the backlog. */
         if (server.repl_backlog) feedReplicationBacklogWithObject(selectcmd);
 
-        /* Send it to slaves. */
+        /* 将其发送给从节点。 */ /* Send it to slaves. */
         listRewind(slaves,&li);
         while((ln = listNext(&li))) {
             client *slave = ln->value;
@@ -306,11 +326,11 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     }
     server.slaveseldb = dictid;
 
-    /* Write the command to the replication backlog if any. */
+    /* 如果有 backlog，则将命令写入 replication backlog。 */ /* Write the command to the replication backlog if any. */
     if (server.repl_backlog) {
         char aux[LONG_STR_SIZE+3];
 
-        /* Add the multi bulk reply length. */
+        /* 添加多条批量回复的长度。 */ /* Add the multi bulk reply length. */
         aux[0] = '*';
         len = ll2string(aux+1,sizeof(aux)-1,argc);
         aux[len+1] = '\r';
@@ -323,6 +343,8 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
             /* We need to feed the buffer with the object as a bulk reply
              * not just as a plain string, so create the $..CRLF payload len
              * and add the final CRLF */
+            /* 我们需要将对象作为批量回复写入缓冲区，而不仅仅是普通字符串，
+             * 因此创建 $..CRLF 的有效负载长度并添加最终的 CRLF。 */
             aux[0] = '$';
             len = ll2string(aux+1,sizeof(aux)-1,objlen);
             aux[len+1] = '\r';
@@ -333,7 +355,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
     }
 
-    /* Write the command to every slave. */
+    /* 将命令写入每个从节点。 */ /* Write the command to every slave. */
     listRewind(slaves,&li);
     while((ln = listNext(&li))) {
         client *slave = ln->value;
@@ -343,12 +365,15 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         /* Feed slaves that are waiting for the initial SYNC (so these commands
          * are queued in the output buffer until the initial SYNC completes),
          * or are already in sync with the master. */
+        /* 向等待初始 SYNC 的从节点提供数据（这些命令会排队到输出缓冲区，
+         * 直到初始 SYNC 完成），或者向已经与主节点同步的从节点提供数据。 */
 
-        /* Add the multi bulk length. */
+        /* 添加多条批量回复的长度。 */ /* Add the multi bulk length. */
         addReplyArrayLen(slave,argc);
 
         /* Finally any additional argument that was not stored inside the
          * static buffer if any (from j to argc). */
+        /* 最后，处理未存储在静态缓冲区中的任何额外参数（从 j 到 argc）。 */
         for (j = 0; j < argc; j++)
             addReplyBulk(slave,argv[j]);
     }
