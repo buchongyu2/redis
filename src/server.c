@@ -1983,6 +1983,8 @@ void checkChildrenDone(void) {
          * must make sure not to flag lastbgsave_status, etc incorrectly.
          * We could directly terminate the child process via SIGUSR1
          * without handling it */
+        /* sigKillChildHandler 捕获信号并调用 exit()，但我们必须确保不会错误地标记 lastbgsave_status 等状态。
+         * 我们可以直接通过 SIGUSR1 终止子进程，而无需处理它。 */
         if (exitcode == SERVER_CHILD_NOERROR_RETVAL) {
             bysignal = SIGUSR1;
             exitcode = 1;
@@ -2016,6 +2018,7 @@ void checkChildrenDone(void) {
         }
 
         /* start any pending forks immediately. */
+        /* 立即启动任何挂起的 fork 操作。 */
         replicationStartPendingFork();
     }
 }
@@ -2433,6 +2436,7 @@ extern int ProcessingEventsWhileBlocked;
  *
  * The most important is freeClientsInAsyncFreeQueue but we also
  * call some other low-risk functions. */
+
 /* 该函数在 Redis 进入事件驱动库主循环时调用，也就是在等待就绪文件描述符前。
  *
  * 注意：该函数目前由两个地方调用：
@@ -2448,7 +2452,7 @@ extern int ProcessingEventsWhileBlocked;
  */
 void beforeSleep(struct aeEventLoop *eventLoop) {
     UNUSED(eventLoop);
-
+    // 记录最大使用的内存
     size_t zmalloc_used = zmalloc_used_memory();
     if (zmalloc_used > server.stat_peak_memory)
         server.stat_peak_memory = zmalloc_used;
@@ -2537,7 +2541,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * increment the replication backlog, they'll be sent after the pause
      * if we are still the master. */
 
-    /* 如果在之前的事件循环迭代中至少有一个客户端被阻塞，
+    /* 
+     * 如果在之前的事件循环迭代中至少有一个客户端被阻塞，
      * 则向所有从节点发送一个 ACK 请求。
      * 注意，我们在调用 processUnblockedClients() 之后执行此操作，
      * 因此如果有多个流水线中的 WAIT 命令，而刚刚解除阻塞的 WAIT
@@ -2548,12 +2553,13 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * 复制积压缓冲区的大小。如果暂停结束后我们仍然是主节点，
      * ACK 将会被发送。 */
     // 主节点需要向从节点发送 REPLCONF GETACK 命令，以请求从节点报告其复制偏移量。
+    // 这里要要把命令写到了复制积压缓存中，防止命令传播后，offset 不一致。
     if (server.get_ack_from_slaves && !checkClientPauseTimeoutAndReturnIfPaused()) {
         robj *argv[3];
 
         argv[0] = shared.replconf; // REPLCONF
         argv[1] = shared.getack;   // GETACK
-        argv[2] = shared.special_asterick;  /* 未使用的参数,是个"*"号 */ /* Not used argument. */
+        argv[2] = shared.special_asterick;                                /* 未使用的参数,是个"*"号 */ /* Not used argument. */
         replicationFeedSlaves(server.slaves, server.slaveseldb, argv, 3); // 在这里开始发送REPLCONF GETACK
         server.get_ack_from_slaves = 0;
     }
